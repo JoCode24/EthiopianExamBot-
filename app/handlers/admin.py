@@ -233,8 +233,7 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data["aq_subject_label"] = subject.replace("_", " ").title()
         context.user_data["waiting_for"] = "aq_question_text"
         await query.edit_message_text(
-            "📝 Subject: *" + context.user_data["aq_subject_label"] + "*\n\nType the question text:\nType /cancel to abort.",
-            parse_mode="Markdown")
+            "📝 Subject: " + context.user_data["aq_subject_label"] + "\n\nType the question text:\nType /cancel to abort.")
     elif data.startswith("aq_dept_"):
         dept = data.replace("aq_dept_", "")
         context.user_data["aq_stream"] = dept
@@ -282,6 +281,15 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         if has_upload:
             context.user_data["upload_exam_type"] = "exit"
         depts = await get_depts("exit")
+        if not depts:
+            await query.edit_message_text(
+                "⚠️ No Exit Exam departments found.\n\n"
+                "Add departments first:\n"
+                "Admin Panel → Manage Departments → Add Department\n\n"
+                "Format: exam_type|key|name|emoji\n"
+                "Example: exit|nursing|Nursing",
+                reply_markup=admin_back_keyboard())
+            return
         await query.edit_message_text("🏛️ Choose department:", reply_markup=build_dept_keyboard(depts))
 
     elif data == "aq_type_coc":
@@ -289,6 +297,15 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         if has_upload:
             context.user_data["upload_exam_type"] = "coc"
         depts = await get_depts("coc")
+        if not depts:
+            await query.edit_message_text(
+                "⚠️ No CoC departments found.\n\n"
+                "Add departments first:\n"
+                "Admin Panel → Manage Departments → Add Department\n\n"
+                "Format: exam_type|key|name|emoji\n"
+                "Example: coc|coc_electrical|Electrical",
+                reply_markup=admin_back_keyboard())
+            return
         await query.edit_message_text("📋 Choose CoC department:", reply_markup=build_dept_keyboard(depts))
 
     elif data == "aq_type_driving":
@@ -298,6 +315,15 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             context.user_data["upload_exam_type"] = "driving"
             context.user_data["upload_stream"] = "general"
         subjects = await get_subjects("driving", "general")
+        if not subjects:
+            await query.edit_message_text(
+                "⚠️ No Driving subjects found.\n\n"
+                "Add subjects first:\n"
+                "Admin Panel → Manage Subjects → Add Subject\n\n"
+                "Format: exam_type|stream|key|name|emoji\n"
+                "Example: driving|general|traffic_rules|Traffic Rules",
+                reply_markup=admin_back_keyboard())
+            return
         prefix = "upload_subject_" if has_upload else "aq_subject_"
         await query.edit_message_text("🚗 Choose subject:", reply_markup=build_subject_keyboard(subjects, prefix=prefix))
 
@@ -339,17 +365,15 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             subjects = await get_subjects(exam_type, dept)
             if subjects:
                 await query.edit_message_text(
-                    "📋 Choose subject for *" + dept.replace("_", " ").title() + "*:",
-                    parse_mode="Markdown",
+                    "📋 Choose subject for " + dept.replace("_", " ").title() + ":",
                     reply_markup=build_subject_keyboard(subjects, prefix="upload_subject_"))
             else:
                 context.user_data["upload_subject"] = dept
                 parsed = context.user_data.get("parsed_questions", [])
                 await query.edit_message_text(
-                    "✅ Ready to save *" + str(len(parsed)) + "* questions\n"
+                    "✅ Ready to save " + str(len(parsed)) + " questions\n"
                     "Department: " + dept.replace("_", " ").title() + "\n"
                     "Exam: " + exam_type.title() + "\n\nConfirm?",
-                    parse_mode="Markdown",
                     reply_markup=admin_confirm_keyboard())
         else:
             context.user_data["aq_stream"] = dept
@@ -357,8 +381,7 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             context.user_data["aq_subject_label"] = dept.replace("_", " ").title()
             context.user_data["waiting_for"] = "aq_question_text"
             await query.edit_message_text(
-                "📝 Department: *" + dept.replace("_", " ").title() + "*\n\nType the question text:\nType /cancel to abort.",
-                parse_mode="Markdown")
+                "📝 Department: " + dept.replace("_", " ").title() + "\n\nType the question text:\nType /cancel to abort.")
 
     elif data.startswith("upload_subject_"):
         subject = data.replace("upload_subject_", "")
@@ -367,10 +390,9 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         exam_type = context.user_data.get("upload_exam_type", "entrance")
         stream = context.user_data.get("upload_stream", "natural")
         await query.edit_message_text(
-            "✅ *Ready to save " + str(len(parsed)) + " questions*\n\n"
+            "✅ Ready to save " + str(len(parsed)) + " questions\n\n"
             "Subject: " + subject.replace("_", " ").title() + "\n"
             "Exam: " + exam_type.title() + " / " + stream + "\n\nConfirm?",
-            parse_mode="Markdown",
             reply_markup=admin_confirm_keyboard())
 
     elif data == "aq_confirm_save":
@@ -848,12 +870,11 @@ async def save_bulk_questions(query, context):
     logger.info(f"Bulk upload: exam={exam_type} stream={stream} subject={subject} saved={saved} failed={failed}")
     context.user_data.clear()
     await query.edit_message_text(
-        "✅ *Upload Complete!*\n\n"
+        "✅ Upload Complete!\n\n"
         "Exam: " + exam_type.title() + " / " + stream + "\n"
         "Subject: " + subject.replace("_", " ").title() + "\n"
-        "✅ Saved: " + str(saved) + "\n"
-        "⚠️ Skipped (duplicates/errors): " + str(failed),
-        parse_mode="Markdown",
+        "Saved: " + str(saved) + "\n"
+        "Skipped (duplicates/errors): " + str(failed),
         reply_markup=admin_back_keyboard())
 
 
