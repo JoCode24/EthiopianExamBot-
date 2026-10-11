@@ -1041,12 +1041,12 @@ async def show_pending_receipts(query, context):
         if p["dept"]:
             label += "/" + str(p["dept"]).replace("_", " ").title()
         caption = (
-            "🧾 *PENDING RECEIPT*\n\n"
-            "👤 User: " + str(p["full_name"] or "Unknown") + "\n"
-            "🆔 ID: " + str(p["telegram_id"]) + "\n"
-            "🏦 Bank: " + str(p["bank"]) + "\n"
-            "📚 Exam: " + label + "\n"
-            "📅 Date: " + str(p["created_at"])[:10]
+            "PENDING RECEIPT\n\n"
+            "User: " + str(p["full_name"] or "Unknown") + "\n"
+            "ID: " + str(p["telegram_id"]) + "\n"
+            "Bank: " + str(p["bank"]) + "\n"
+            "Exam: " + label + "\n"
+            "Date: " + str(p["created_at"])[:10]
         )
         kb = receipt_action_keyboard(
             p["id"], p["telegram_id"],
@@ -1058,13 +1058,11 @@ async def show_pending_receipts(query, context):
                 chat_id=query.from_user.id,
                 photo=p["receipt_file_id"],
                 caption=caption,
-                parse_mode="Markdown",
                 reply_markup=kb)
         except Exception:
             await context.bot.send_message(
                 chat_id=query.from_user.id,
                 text=caption,
-                parse_mode="Markdown",
                 reply_markup=kb)
 
 
@@ -1099,9 +1097,8 @@ async def approve_receipt(query, context, data):
 
     try:
         await query.edit_message_caption(
-            "✅ *APPROVED* — Subscription activated.\n\n"
-            "Access: " + label + "\nDuration: 30 days",
-            parse_mode="Markdown")
+            "✅ APPROVED — Subscription activated.\n\n"
+            "Access: " + label + "\nDuration: 30 days")
     except Exception:
         pass
     try:
@@ -1131,7 +1128,7 @@ async def reject_receipt(query, context, data):
         await db.commit()
 
     try:
-        await query.edit_message_caption("❌ *REJECTED.*", parse_mode="Markdown")
+        await query.edit_message_caption("❌ REJECTED.")
     except Exception:
         pass
     try:
