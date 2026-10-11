@@ -205,6 +205,17 @@ async def _run_migrations(db):
         except Exception:
             pass
 
+    # Ensure free_subject_usage table exists on databases created before it was added
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS free_subject_usage (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER NOT NULL,
+            subject     TEXT NOT NULL,
+            used_count  INTEGER DEFAULT 0,
+            UNIQUE(telegram_id, subject)
+        )""")
+    await db.commit()
+
     # Fix driving questions with empty stream
     await db.execute("""
         UPDATE questions SET stream='general'

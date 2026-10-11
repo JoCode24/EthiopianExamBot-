@@ -92,6 +92,16 @@ async def has_full_access(user: dict, exam_type: str,
 
 async def get_free_used_for_subject(telegram_id: int, subject: str) -> int:
     async with aiosqlite.connect(DATABASE_PATH) as db:
+        # Ensure table exists (safety net for old databases)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS free_subject_usage (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                subject     TEXT NOT NULL,
+                used_count  INTEGER DEFAULT 0,
+                UNIQUE(telegram_id, subject)
+            )""")
+        await db.commit()
         cur = await db.execute(
             "SELECT used_count FROM free_subject_usage "
             "WHERE telegram_id=? AND subject=?",
@@ -108,6 +118,16 @@ async def can_do_free_for_subject(telegram_id: int, subject: str):
 
 async def increment_free_for_subject(telegram_id: int, subject: str):
     async with aiosqlite.connect(DATABASE_PATH) as db:
+        # Ensure table exists (safety net for old databases)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS free_subject_usage (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                subject     TEXT NOT NULL,
+                used_count  INTEGER DEFAULT 0,
+                UNIQUE(telegram_id, subject)
+            )""")
+        await db.commit()
         row = await (await db.execute(
             "SELECT used_count FROM free_subject_usage "
             "WHERE telegram_id=? AND subject=?",
