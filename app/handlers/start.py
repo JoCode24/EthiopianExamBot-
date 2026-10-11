@@ -56,9 +56,8 @@ async def _ensure_user(user_obj, referral_code: str = None):
 
             await db.execute(
                 "INSERT OR IGNORE INTO users "
-                "(telegram_id, username, full_name, is_admin, referral_code, referred_by, "
-                "free_access_expiry) "
-                "VALUES (?,?,?,?,?,?, datetime('now','+1 day'))",
+                                "(telegram_id, username, full_name, is_admin, referral_code, referred_by) "
+                "VALUES (?,?,?,?,?,?)",
                 (tid, username, full_name, is_admin_flag, ref_code, referred_by))
         else:
             await db.execute(
