@@ -333,6 +333,24 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             context.user_data["upload_exam_type"] = "remedial"
         await query.edit_message_text("📝 Choose stream:", reply_markup=admin_stream_keyboard())
 
+    elif data == "aq_type_mock":
+        context.user_data["aq_exam_type"] = "mock"
+        if has_upload:
+            context.user_data["upload_exam_type"] = "mock"
+        # Mock exam uses stream="mock" for all subjects
+        subjects = await get_subjects("mock", "mock")
+        if has_upload:
+            context.user_data["upload_stream"] = "mock"
+            await query.edit_message_text(
+                "📋 *Model / Mock Exam* — Choose subject:",
+                parse_mode="Markdown",
+                reply_markup=build_subject_keyboard(subjects, prefix="upload_subject_"))
+        else:
+            await query.edit_message_text(
+                "📋 *Model / Mock Exam* — Choose subject:",
+                parse_mode="Markdown",
+                reply_markup=build_subject_keyboard(subjects))
+
     elif data == "aq_stream_natural":
         exam_type = context.user_data.get("aq_exam_type", "entrance")
         context.user_data["aq_stream"] = "natural"
@@ -1041,12 +1059,12 @@ async def show_pending_receipts(query, context):
         if p["dept"]:
             label += "/" + str(p["dept"]).replace("_", " ").title()
         caption = (
-            "PENDING RECEIPT\n\n"
-            "User: " + str(p["full_name"] or "Unknown") + "\n"
-            "ID: " + str(p["telegram_id"]) + "\n"
-            "Bank: " + str(p["bank"]) + "\n"
-            "Exam: " + label + "\n"
-            "Date: " + str(p["created_at"])[:10]
+            "🧾 *PENDING RECEIPT*\n\n"
+            "👤 User: " + str(p["full_name"] or "Unknown") + "\n"
+            "🆔 ID: " + str(p["telegram_id"]) + "\n"
+            "🏦 Bank: " + str(p["bank"]) + "\n"
+            "📚 Exam: " + label + "\n"
+            "📅 Date: " + str(p["created_at"])[:10]
         )
         kb = receipt_action_keyboard(
             p["id"], p["telegram_id"],
@@ -1058,11 +1076,13 @@ async def show_pending_receipts(query, context):
                 chat_id=query.from_user.id,
                 photo=p["receipt_file_id"],
                 caption=caption,
+                parse_mode="Markdown",
                 reply_markup=kb)
         except Exception:
             await context.bot.send_message(
                 chat_id=query.from_user.id,
                 text=caption,
+                parse_mode="Markdown",
                 reply_markup=kb)
 
 
@@ -1097,8 +1117,9 @@ async def approve_receipt(query, context, data):
 
     try:
         await query.edit_message_caption(
-            "✅ APPROVED — Subscription activated.\n\n"
-            "Access: " + label + "\nDuration: 30 days")
+            "✅ *APPROVED* — Subscription activated.\n\n"
+            "Access: " + label + "\nDuration: 30 days",
+            parse_mode="Markdown")
     except Exception:
         pass
     try:
@@ -1128,7 +1149,7 @@ async def reject_receipt(query, context, data):
         await db.commit()
 
     try:
-        await query.edit_message_caption("❌ REJECTED.")
+        await query.edit_message_caption("❌ *REJECTED.*", parse_mode="Markdown")
     except Exception:
         pass
     try:

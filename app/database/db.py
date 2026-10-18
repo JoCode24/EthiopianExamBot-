@@ -220,6 +220,35 @@ async def _run_migrations(db):
     await db.execute("""
         UPDATE questions SET stream='general'
         WHERE exam_type='driving' AND (stream='' OR stream IS NULL)""")
+
+    # Seed mock subjects for existing databases that lack them
+    mock_subjects = [
+        ("mock","mock_math",        "mock_math",       "Mathematics",           "🧮"),
+        ("mock","mock_physics",     "mock_physics",    "Physics",               "⚡"),
+        ("mock","mock_chemistry",   "mock_chemistry",  "Chemistry",             "⚗️"),
+        ("mock","mock_biology",     "mock_biology",    "Biology",               "🔬"),
+        ("mock","mock_english",     "mock_english",    "English",               "📖"),
+        ("mock","mock_aptitude",    "mock_aptitude",   "Aptitude",              "🧠"),
+        ("mock","mock_history",     "mock_history",    "History",               "📜"),
+        ("mock","mock_geography",   "mock_geography",  "Geography",             "🗺️"),
+        ("mock","mock_economics",   "mock_economics",  "Economics",             "💰"),
+        ("mock","mock_civics",      "mock_civics",     "Civics & Ethics",       "⚖️"),
+        ("mock","mock_it",          "mock_it",         "IT & Computer Science", "💻"),
+        ("mock","mock_accounting",  "mock_accounting", "Accounting & Finance",  "📊"),
+        ("mock","mock_business",    "mock_business",   "Business Management",   "💼"),
+        ("mock","mock_engineering", "mock_engineering","Engineering",           "⚙️"),
+        ("mock","mock_law",         "mock_law",        "Law",                   "⚖️"),
+        ("mock","mock_agriculture", "mock_agriculture","Agriculture",           "🌾"),
+        ("mock","mock_nursing",     "mock_nursing",    "Nursing",               "🩺"),
+        ("mock","mock_pharmacy",    "mock_pharmacy",   "Pharmacy",              "💊"),
+        ("mock","mock_medicine",    "mock_medicine",   "Medicine",              "🏥"),
+        ("mock","mock_education",   "mock_education",  "Education",             "📖"),
+    ]
+    await db.executemany(
+        "INSERT OR IGNORE INTO subjects "
+        "(exam_type,stream,subject_key,subject_name,emoji) VALUES (?,?,?,?,?)",
+        mock_subjects)
+    await db.commit()
     await db.commit()
 
 
@@ -302,6 +331,29 @@ async def _seed_defaults(db):
                 ("exit","natural_resource",  "exit_nr",         "Natural Resource Mgmt",   "🌿"),
                 ("exit","urban_planning",    "exit_urb",        "Urban Planning",          "🏙️"),
                 ("exit","sport_science",     "exit_sport",      "Sport Science",           "🏃"),
+
+                # ── MOCK / MODEL EXAM ─────────────────────────────────────────
+                # All major subjects — free 10 questions each, no subscription needed
+                ("mock","mock_math",         "mock_math",       "Mathematics",             "🧮"),
+                ("mock","mock_physics",      "mock_physics",    "Physics",                 "⚡"),
+                ("mock","mock_chemistry",    "mock_chemistry",  "Chemistry",               "⚗️"),
+                ("mock","mock_biology",      "mock_biology",    "Biology",                 "🔬"),
+                ("mock","mock_english",      "mock_english",    "English",                 "📖"),
+                ("mock","mock_aptitude",     "mock_aptitude",   "Aptitude",                "🧠"),
+                ("mock","mock_history",      "mock_history",    "History",                 "📜"),
+                ("mock","mock_geography",    "mock_geography",  "Geography",               "🗺️"),
+                ("mock","mock_economics",    "mock_economics",  "Economics",               "💰"),
+                ("mock","mock_civics",       "mock_civics",     "Civics & Ethics",         "⚖️"),
+                ("mock","mock_it",           "mock_it",         "IT & Computer Science",   "💻"),
+                ("mock","mock_accounting",   "mock_accounting", "Accounting & Finance",    "📊"),
+                ("mock","mock_business",     "mock_business",   "Business Management",     "💼"),
+                ("mock","mock_engineering",  "mock_engineering","Engineering",             "⚙️"),
+                ("mock","mock_law",          "mock_law",        "Law",                     "⚖️"),
+                ("mock","mock_agriculture",  "mock_agriculture","Agriculture",             "🌾"),
+                ("mock","mock_nursing",      "mock_nursing",    "Nursing",                 "🩺"),
+                ("mock","mock_pharmacy",     "mock_pharmacy",   "Pharmacy",                "💊"),
+                ("mock","mock_medicine",     "mock_medicine",   "Medicine",                "🏥"),
+                ("mock","mock_education",    "mock_education",  "Education",               "📖"),
 
                 # ── COC — subject_key = dept_key (no sub-subjects) ────────────
                 ("coc","coc_electrical",     "coc_elec",        "Electrical Installation", "⚡"),

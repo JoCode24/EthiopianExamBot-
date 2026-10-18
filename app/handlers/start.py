@@ -56,7 +56,7 @@ async def _ensure_user(user_obj, referral_code: str = None):
 
             await db.execute(
                 "INSERT OR IGNORE INTO users "
-                                "(telegram_id, username, full_name, is_admin, referral_code, referred_by) "
+                "(telegram_id, username, full_name, is_admin, referral_code, referred_by) "
                 "VALUES (?,?,?,?,?,?)",
                 (tid, username, full_name, is_admin_flag, ref_code, referred_by))
         else:
@@ -104,7 +104,7 @@ async def _show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         days_left = (datetime.fromisoformat(free_expiry) - datetime.utcnow()).days + 1
         status = f"🆓 Free Trial — {days_left} day(s) left"
     else:
-        status = "🔓 Free Mode (5 questions/subject)"
+        status = "🔓 Free Mode (5 q/subject · 10 free on Model Exam)"
 
     # Main menu buttons — NO admin panel button here
     buttons = [
@@ -118,6 +118,7 @@ async def _show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("🏅 COC Exam",   callback_data="exam_coc"),
+            InlineKeyboardButton("📋 Model Exam", callback_data="exam_mock"),
         ],
     ]
 
@@ -216,6 +217,7 @@ async def _show_exam_type(query, exam_type: str):
         "remedial": "📚 Remedial Exam",
         "driving":  "🚗 Driving License Exam",
         "coc":      "🏅 COC Competency Exam",
+        "mock":     "📋 Model / Mock Exam",
     }
     title = exam_labels.get(exam_type, exam_type.title())
 

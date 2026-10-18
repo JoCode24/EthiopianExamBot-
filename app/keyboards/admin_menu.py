@@ -44,6 +44,7 @@ def admin_exam_type_keyboard():
         [InlineKeyboardButton("📋 CoC Exam", callback_data="aq_type_coc")],
         [InlineKeyboardButton("🚗 Driving Licence", callback_data="aq_type_driving")],
         [InlineKeyboardButton("📝 Remedial Exam", callback_data="aq_type_remedial")],
+        [InlineKeyboardButton("📋 Model / Mock Exam", callback_data="aq_type_mock")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_back")],
     ])
 

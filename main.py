@@ -45,6 +45,13 @@ from app.handlers.subscription import (
     receipt_photo_handler,
 )
 from app.handlers.user_features import redeem_command, referral_command
+from app.handlers.mock_exam import (
+    mock_menu_handler,
+    mock_subject_handler,
+    mock_start_handler,
+    mock_answer_handler,
+    mock_next_handler,
+)
 from app.utils.logger import logger
 
 
@@ -101,6 +108,13 @@ def main():
     # ── Stream / dept navigation (pipe-separated: stream|entrance|natural) ─
     app.add_handler(CallbackQueryHandler(stream_select_handler, pattern=r"^stream\|"))
     app.add_handler(CallbackQueryHandler(dept_select_handler,   pattern=r"^dept\|"))
+
+    # ── Mock / Model Exam ─────────────────────────────────────────────────
+    app.add_handler(CallbackQueryHandler(mock_menu_handler,    pattern=r"^exam_mock$"))
+    app.add_handler(CallbackQueryHandler(mock_subject_handler, pattern=r"^mock_subject\|"))
+    app.add_handler(CallbackQueryHandler(mock_start_handler,   pattern=r"^mock_start\|"))
+    app.add_handler(CallbackQueryHandler(mock_answer_handler,  pattern=r"^mock_answer_"))
+    app.add_handler(CallbackQueryHandler(mock_next_handler,    pattern=r"^mock_next$"))
 
     # ── Catch-all (main_menu, exam_, referral, redeem_menu, etc.) ─────────
     app.add_handler(CallbackQueryHandler(button_handler))
