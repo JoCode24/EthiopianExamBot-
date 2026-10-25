@@ -51,6 +51,7 @@ from app.handlers.mock_exam import (
     mock_start_handler,
     mock_answer_handler,
     mock_next_handler,
+    mock_dept_group_handler,
 )
 from app.utils.logger import logger
 
@@ -74,13 +75,13 @@ def main():
     # ── Admin upload (before admin_button to avoid overlap) ───────────────
     app.add_handler(CallbackQueryHandler(
         admin_upload_handler,
-        pattern=r"^(aq_type_|aq_stream_|upload_subject_|aq_confirm_save|aq_dept_)",
+        pattern=r"^(aq_type_|aq_stream_|aq_mock_stream_|aq_mock_dept_|upload_subject_|aq_confirm_save|aq_dept_)",
     ))
 
     # ── Admin panel ───────────────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(
         admin_button_handler,
-        pattern=r"^(admin_|aq_subject_|edit_q_field_|rcpt_ok_|rcpt_no_)",
+        pattern=r"^(admin_|aq_subject_|edit_q_field_|rcpt_ok_|rcpt_no_|vq_)",
     ))
 
     # ── Subscription flow ─────────────────────────────────────────────────
@@ -110,11 +111,12 @@ def main():
     app.add_handler(CallbackQueryHandler(dept_select_handler,   pattern=r"^dept\|"))
 
     # ── Mock / Model Exam ─────────────────────────────────────────────────
-    app.add_handler(CallbackQueryHandler(mock_menu_handler,    pattern=r"^exam_mock$"))
-    app.add_handler(CallbackQueryHandler(mock_subject_handler, pattern=r"^mock_subject\|"))
-    app.add_handler(CallbackQueryHandler(mock_start_handler,   pattern=r"^mock_start\|"))
-    app.add_handler(CallbackQueryHandler(mock_answer_handler,  pattern=r"^mock_answer_"))
-    app.add_handler(CallbackQueryHandler(mock_next_handler,    pattern=r"^mock_next$"))
+    app.add_handler(CallbackQueryHandler(mock_menu_handler,       pattern=r"^exam_mock$"))
+    app.add_handler(CallbackQueryHandler(mock_dept_group_handler, pattern=r"^mock_dept_group\|"))
+    app.add_handler(CallbackQueryHandler(mock_subject_handler,    pattern=r"^mock_subject\|"))
+    app.add_handler(CallbackQueryHandler(mock_start_handler,      pattern=r"^mock_start\|"))
+    app.add_handler(CallbackQueryHandler(mock_answer_handler,     pattern=r"^mock_answer_"))
+    app.add_handler(CallbackQueryHandler(mock_next_handler,       pattern=r"^mock_next$"))
 
     # ── Catch-all (main_menu, exam_, referral, redeem_menu, etc.) ─────────
     app.add_handler(CallbackQueryHandler(button_handler))

@@ -3,14 +3,14 @@ app/handlers/mock_exam.py
 Mock / Model Exam section.
 
 Rules:
-- FREE for every user — no subscription required.
-- Each user gets FREE_MOCK_QUESTIONS (10) free questions per subject key.
-  Tracked in the same free_subject_usage table as regular exams (subject key
-  is unique so there's no collision with entrance/exit/coc subjects).
-- After 10 questions are exhausted the user is offered to subscribe for unlimited access.
+- FREE for every user — 10 free questions per subject, no subscription required.
+- If a user is subscribed to exit/coc for a specific dept (e.g. nursing),
+  they get UNLIMITED questions for mock subjects linked to that dept.
+- Any active subscription also grants unlimited mock access.
 - Does NOT touch any exit / coc / entrance logic.
 """
 import random
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
@@ -31,11 +31,42 @@ async def _get_user(telegram_id: int):
 
 
 async def _get_mock_subjects() -> list:
+    """
+    Build subject list dynamically from questions table.
+    Returns dicts with: subject_key, subject_name, emoji, stream
+    Only subjects that have at least 1 uploaded question are returned.
+    Falls back to subjects table for name/emoji lookup.
+    """
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
+        # Get distinct stream+subject combos from actual questions
         cur = await db.execute(
-            "SELECT * FROM subjects WHERE exam_type='mock' ORDER BY subject_name")
-        return [dict(r) for r in await cur.fetchall()]
+            "SELECT DISTINCT stream, subject FROM questions "
+            "WHERE exam_type='mock' ORDER BY stream, subject")
+        rows = [dict(r) for r in await cur.fetchall()]
+
+        result = []
+        for r in rows:
+            subj_key = r["subject"]
+            stream   = r["stream"] or "general"
+            # Look up display info from subjects table
+            cur2 = await db.execute(
+                "SELECT subject_name, emoji FROM subjects WHERE subject_key=?", (subj_key,))
+            info = await cur2.fetchone()
+            if info:
+                name  = info["subject_name"]
+                emoji = info["emoji"] or "📘"
+            else:
+                # Fallback: derive nice name from key
+                name  = subj_key.replace("_", " ").title()
+                emoji = "📘"
+            result.append({
+                "subject_key":  subj_key,
+                "subject_name": name,
+                "emoji":        emoji,
+                "stream":       stream,
+            })
+        return result
 
 
 async def _get_mock_questions(subject_key: str, year=None, limit: int = 40) -> list:
@@ -95,14 +126,19 @@ async def _increment_mock_used(telegram_id: int, subject_key: str):
         await db.commit()
 
 
-async def _is_subscribed(user: dict) -> bool:
-    """Check if user has any active subscription (for unlimited mock questions)."""
-    from datetime import datetime
+async def _is_subscribed(user: dict, subject_stream: str = None) -> bool:
+    """
+    Check if user has active subscription that grants unlimited mock access.
+    - Any subscription grants full mock access.
+    - Subscribed to exit/coc for dept X → full access to mock subjects with stream=X.
+    """
     now = datetime.utcnow().isoformat()
     if not user.get("is_subscribed"):
         return False
     expiry = user.get("subscription_expiry") or ""
-    return not expiry or expiry > now
+    if expiry and expiry <= now:
+        return False
+    return True
 
 
 async def _save_session(telegram_id: int, subject_key: str, total: int) -> int:
@@ -127,47 +163,125 @@ async def _update_session(session_id: int, score: int):
 # ── Handlers ────────────────────────────────────────────────────────────────────
 
 async def mock_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback: exam_mock  — shows all mock subjects."""
+    """Callback: exam_mock — shows grouped mock subjects dynamically."""
     query = update.callback_query
     await query.answer()
     tid = query.from_user.id
 
+    user = await _get_user(tid)
+    subscribed = await _is_subscribed(user) if user else False
+
     subjects = await _get_mock_subjects()
     if not subjects:
         await query.edit_message_text(
-            "📋 *Model Exam*\n\n"
-            "No subjects have been uploaded yet.\n"
-            "Check back soon — questions are being added!",
+            "📋 *Model / Mock Exam*\n\n"
+            "No mock questions have been uploaded yet.\n\n"
+            "📢 Check back soon — questions are being added!\n\n"
+            "Once available, you'll be able to:\n"
+            "  • Practice per department & subject\n"
+            "  • Get 10 free questions per subject\n"
+            "  • Track your scores",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Back", callback_data="main_menu")]
+                [InlineKeyboardButton("⬅️ Back to Menu", callback_data="main_menu")]
             ])
         )
         return
 
-    buttons = []
+    # Group by stream/dept
+    groups = {}
     for s in subjects:
-        used = await _get_mock_used(tid, s["subject_key"])
-        remaining = max(0, FREE_MOCK_QUESTIONS - used)
-        label = f"{s['emoji']} {s['subject_name']}"
-        if remaining > 0:
-            label += f"  ({remaining} free)"
-        else:
-            label += "  ✅ done"
-        buttons.append([InlineKeyboardButton(
-            label,
-            callback_data=f"mock_subject|{s['subject_key']}"
-        )])
+        grp = s.get("stream") or "general"
+        if grp not in groups:
+            groups[grp] = []
+        groups[grp].append(s)
 
-    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="main_menu")])
+    buttons = []
+
+    # Fetch dept display info for all groups at once
+    dept_info_cache = {}
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        for grp in groups:
+            if grp not in ("general", "mock"):
+                cur = await db.execute(
+                    "SELECT dept_name, emoji FROM departments WHERE dept_key=?", (grp,))
+                row = await cur.fetchone()
+                if row:
+                    dept_info_cache[grp] = (row[0], row[1])
+
+    # Sort groups: general/mock first, then alphabetical by dept name
+    def grp_sort_key(k):
+        if k in ("general", "mock"):
+            return (0, k)
+        info = dept_info_cache.get(k)
+        return (1, info[0] if info else k)
+
+    sorted_groups = sorted(groups.keys(), key=grp_sort_key)
+
+    for grp in sorted_groups:
+        subj_list = groups[grp]
+
+        # Department header
+        if grp in ("general", "mock"):
+            header = "── 📋 General / Mixed ──"
+        else:
+            info = dept_info_cache.get(grp)
+            if info:
+                header = f"── {info[1]} {info[0]} ──"
+            else:
+                header = f"── {grp.replace('_', ' ').title()} ──"
+
+        # Only show header if there are multiple groups
+        if len(sorted_groups) > 1:
+            buttons.append([InlineKeyboardButton(
+                header, callback_data=f"mock_dept_group|{grp}")])
+
+        # Subject buttons in 2-column rows
+        row = []
+        for s in subj_list:
+            used = await _get_mock_used(tid, s["subject_key"])
+            remaining = max(0, FREE_MOCK_QUESTIONS - used)
+            emoji = s.get("emoji", "📘")
+            name = s["subject_name"]
+            if subscribed:
+                status = " ✅"
+            elif remaining > 0:
+                status = f" ({remaining}🎯)"
+            else:
+                status = " 🔒"
+            label = f"{emoji} {name}{status}"
+            row.append(InlineKeyboardButton(
+                label, callback_data=f"mock_subject|{s['subject_key']}"))
+            if len(row) == 2:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+
+    buttons.append([InlineKeyboardButton("⬅️ Back to Menu", callback_data="main_menu")])
+
+    total_subjects = len(subjects)
+    if subscribed:
+        access_line = "💎 *Full Access* — unlimited questions for all subjects"
+    else:
+        access_line = (
+            f"🆓 *{FREE_MOCK_QUESTIONS} free questions per subject*\n"
+            "No subscription required to start!"
+        )
 
     await query.edit_message_text(
-        "📋 *Model / Mock Exam*\n\n"
-        f"🆓 *{FREE_MOCK_QUESTIONS} free questions per subject — no subscription needed!*\n\n"
-        "Pick a subject to start practicing:",
+        f"📋 *Model / Mock Exam*\n\n"
+        f"{access_line}\n\n"
+        f"📚 *{total_subjects} subject(s) available* — choose one to practice:",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=InlineKeyboardMarkup(buttons),
     )
+
+
+async def mock_dept_group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback: mock_dept_group|<dept_key> — tapping a dept header does nothing."""
+    query = update.callback_query
+    await query.answer("Tap a subject below to start.", show_alert=False)
 
 
 async def mock_subject_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -182,7 +296,6 @@ async def mock_subject_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text("Please start the bot first with /start")
         return
 
-    # Check remaining free questions
     used = await _get_mock_used(tid, subject_key)
     subscribed = await _is_subscribed(user)
 
@@ -192,10 +305,9 @@ async def mock_subject_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             f"You've used all *{FREE_MOCK_QUESTIONS} free questions* for this subject.\n\n"
             "Subscribe to get:\n"
             "  ✅ Unlimited mock exam questions\n"
-            "  ✅ All subjects & topics\n"
+            "  ✅ All subjects & departments\n"
             "  ✅ Detailed explanations\n"
-            "  ✅ Full leaderboard access\n\n"
-            "👉 Only *50 ETB/month* — keep practicing! 🚀",
+            "  ✅ Full leaderboard access",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("💎 Subscribe Now", callback_data="subscribe")],
@@ -213,12 +325,13 @@ async def mock_subject_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             (subject_key,))
         years = [r[0] for r in await cur.fetchall()]
 
-    # Subject display name
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        cur = await db.execute(
+        cur2 = await db.execute(
             "SELECT subject_name, emoji FROM subjects WHERE subject_key=?", (subject_key,))
-        row = await cur.fetchone()
-    subj_name = f"{row[1]} {row[0]}" if row else subject_key
+        row = await cur2.fetchone()
+    if row:
+        subj_name = f"{row[1]} {row[0]}"
+    else:
+        subj_name = subject_key.replace("_", " ").title()
 
     if subscribed:
         status_line = "✅ *Full Access* — unlimited questions"
@@ -230,9 +343,7 @@ async def mock_subject_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     row_btns = []
     for yr in years:
         row_btns.append(InlineKeyboardButton(
-            f"📅 {yr}",
-            callback_data=f"mock_start|{subject_key}|{yr}"
-        ))
+            f"📅 {yr}", callback_data=f"mock_start|{subject_key}|{yr}"))
         if len(row_btns) == 3:
             buttons.append(row_btns)
             row_btns = []
@@ -272,7 +383,6 @@ async def mock_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     subscribed = await _is_subscribed(user)
 
     if not subscribed and used >= FREE_MOCK_QUESTIONS:
-        # Re-check — show paywall
         await query.edit_message_text(
             "📚 *Free Questions Used Up!*\n\n"
             f"You've used all *{FREE_MOCK_QUESTIONS} free questions* for this subject.",
@@ -300,14 +410,13 @@ async def mock_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     session_id = await _save_session(tid, subject_key, len(questions))
-
     context.user_data["mock_exam"] = {
-        "questions":    questions,
-        "current":      0,
-        "score":        0,
-        "session_id":   session_id,
-        "subject_key":  subject_key,
-        "subscribed":   subscribed,
+        "questions":   questions,
+        "current":     0,
+        "score":       0,
+        "session_id":  session_id,
+        "subject_key": subject_key,
+        "subscribed":  subscribed,
     }
 
     await _send_mock_question(query, context)
@@ -370,7 +479,6 @@ async def mock_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         icon, verdict = "❌", f"*Wrong.* Correct answer: *{correct}*"
 
-    # Count usage if not subscribed
     if not exam.get("subscribed"):
         await _increment_mock_used(tid, exam["subject_key"])
 
@@ -453,9 +561,7 @@ async def _finish_mock_exam(query, context: ContextTypes.DEFAULT_TYPE):
 
     kb_rows = [
         [InlineKeyboardButton(
-            "🔁 Try Again",
-            callback_data=f"mock_start|{subject_key}|0"
-        )],
+            "🔁 Try Again", callback_data=f"mock_start|{subject_key}|0")],
         [InlineKeyboardButton("📋 More Subjects", callback_data="exam_mock")],
         [InlineKeyboardButton("🏠 Main Menu",     callback_data="main_menu")],
     ]

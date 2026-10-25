@@ -78,6 +78,37 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await show_stats(query)
     elif data == "admin_view_questions":
         await show_questions(query)
+    elif data.startswith("vq_type_"):
+        exam_type = data.replace("vq_type_", "")
+        await show_questions_by_type(query, exam_type)
+    elif data.startswith("vq_stream_"):
+        # vq_stream_<exam_type>_<stream>
+        parts = data.replace("vq_stream_", "").split("_", 1)
+        if len(parts) == 2:
+            await show_questions_list(query, parts[0], parts[1])
+    elif data.startswith("vq_dept_"):
+        # vq_dept_<exam_type>_<dept_key>
+        rest = data.replace("vq_dept_", "")
+        # exam_type is first segment, dept_key may have underscores
+        first_sep = rest.index("_")
+        et = rest[:first_sep]
+        dk = rest[first_sep + 1:]
+        await show_questions_list(query, et, dk)
+    elif data.startswith("vq_page_"):
+        # vq_page_<exam_type>_<stream>_<offset>
+        rest = data.replace("vq_page_", "")
+        parts = rest.rsplit("_", 1)
+        if len(parts) == 2:
+            try:
+                offset = int(parts[1])
+            except ValueError:
+                offset = 0
+            # parts[0] is exam_type_stream
+            inner = parts[0]
+            sep = inner.index("_")
+            et = inner[:sep]
+            st = inner[sep + 1:]
+            await show_questions_list(query, et, st, offset)
     elif data == "admin_manage_subjects":
         await query.edit_message_text("📚 Manage Subjects", reply_markup=manage_subjects_keyboard())
     elif data == "admin_manage_depts":
@@ -337,19 +368,173 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data["aq_exam_type"] = "mock"
         if has_upload:
             context.user_data["upload_exam_type"] = "mock"
-        # Mock exam uses stream="mock" for all subjects
-        subjects = await get_subjects("mock", "mock")
+        # Show ALL exit + coc departments as upload targets for mock questions
+        exit_depts = await get_depts("exit")
+        coc_depts  = await get_depts("coc")
+
+        buttons = []
+        if exit_depts:
+            buttons.append([InlineKeyboardButton(
+                "── 🎓 Exit Exam Departments ──",
+                callback_data="aq_mock_stream_noop")])
+            row = []
+            for d in exit_depts:
+                row.append(InlineKeyboardButton(
+                    f"{d['emoji']} {d['dept_name']}",
+                    callback_data=f"aq_mock_dept_{d['dept_key']}"))
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+
+        if coc_depts:
+            buttons.append([InlineKeyboardButton(
+                "── 🏅 CoC Departments ──",
+                callback_data="aq_mock_stream_noop")])
+            row = []
+            for d in coc_depts:
+                row.append(InlineKeyboardButton(
+                    f"{d['emoji']} {d['dept_name']}",
+                    callback_data=f"aq_mock_dept_{d['dept_key']}"))
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+
+        # Also offer a "General / Mixed" option
+        buttons.append([InlineKeyboardButton(
+            "📋 General / Mixed Subjects",
+            callback_data="aq_mock_dept_general")])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back")])
+
+        await query.edit_message_text(
+            "📋 *Model / Mock Exam Upload*\n\n"
+            "Choose a department to upload mock questions for:\n\n"
+            "Questions will be stored as Mock Exam and users\n"
+            "can access them by department.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif data == "aq_mock_stream_noop":
+        # Section header tapped — do nothing
+        await query.answer("Select a department below.", show_alert=False)
+        return
+
+    elif data.startswith("aq_mock_stream_"):
+        stream = data.replace("aq_mock_stream_", "")
+        has_upload = bool(context.user_data.get("parsed_questions"))
+        context.user_data["aq_stream"] = stream
         if has_upload:
-            context.user_data["upload_stream"] = "mock"
+            context.user_data["upload_stream"] = stream
+        subjects = await get_subjects("mock", stream)
+        if not subjects:
             await query.edit_message_text(
-                "📋 *Model / Mock Exam* — Choose subject:",
+                f"⚠️ No mock subjects found for stream *{stream}*.\n\n"
+                "Add subjects first via Manage Subjects.\n"
+                "Format: `mock|{stream}|key|name|emoji`",
                 parse_mode="Markdown",
-                reply_markup=build_subject_keyboard(subjects, prefix="upload_subject_"))
+                reply_markup=admin_back_keyboard())
+            return
+        prefix = "upload_subject_" if has_upload else "aq_subject_"
+        await query.edit_message_text(
+            f"📋 Mock — Choose subject:",
+            reply_markup=build_subject_keyboard(subjects, prefix=prefix))
+
+    elif data.startswith("aq_mock_dept_"):
+        dept_key = data.replace("aq_mock_dept_", "")
+        has_upload = bool(context.user_data.get("parsed_questions"))
+        context.user_data["aq_stream"] = dept_key
+        if has_upload:
+            context.user_data["upload_stream"] = dept_key
+
+        if dept_key == "general":
+            # General mock — use general subject list
+            dept_label = "General / Mixed"
+            all_subjects = []
         else:
-            await query.edit_message_text(
-                "📋 *Model / Mock Exam* — Choose subject:",
-                parse_mode="Markdown",
-                reply_markup=build_subject_keyboard(subjects))
+            # Get dept info
+            async with aiosqlite.connect(DATABASE_PATH) as db:
+                cur = await db.execute(
+                    "SELECT dept_name, emoji FROM departments WHERE dept_key=?", (dept_key,))
+                dept_row = await cur.fetchone()
+            dept_label = f"{dept_row[1]} {dept_row[0]}" if dept_row else dept_key.replace("_", " ").title()
+            all_subjects = []
+
+        # Build subject list: subjects from subjects table for this dept/stream,
+        # OR fall back to showing subjects from the dept's own exam type,
+        # OR allow admin to type subject name (for manual entry)
+        # Strategy: look for subjects in subjects table with stream=dept_key (any exam_type)
+        # OR show a nice list from the exit/coc subjects for that dept
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            # Try mock subjects for this stream first
+            cur = await db.execute(
+                "SELECT * FROM subjects WHERE exam_type='mock' AND stream=? ORDER BY subject_name",
+                (dept_key,))
+            mock_subjs = [dict(r) for r in await cur.fetchall()]
+
+            # Also get subjects from exit or coc for this dept
+            cur2 = await db.execute(
+                "SELECT * FROM subjects WHERE stream=? AND exam_type IN ('exit','coc') ORDER BY subject_name",
+                (dept_key,))
+            dept_subjs = [dict(r) for r in await cur2.fetchall()]
+
+        # Merge: prefer mock-tagged ones, add exit/coc subjects as options
+        combined = mock_subjs[:]
+        seen_names = {s["subject_name"] for s in mock_subjs}
+        for s in dept_subjs:
+            if s["subject_name"] not in seen_names:
+                combined.append(s)
+                seen_names.add(s["subject_name"])
+
+        # Build dynamic subject buttons for upload
+        prefix = "upload_subject_" if has_upload else "aq_subject_"
+
+        if not combined:
+            # No subjects — offer to upload directly to the dept as subject
+            if has_upload:
+                context.user_data["upload_subject"] = dept_key
+                parsed = context.user_data.get("parsed_questions", [])
+                await query.edit_message_text(
+                    f"✅ Ready to save *{len(parsed)} questions*\n\n"
+                    f"📋 Department: *{dept_label}*\n"
+                    f"📚 Exam: Mock\n\n"
+                    "Questions will be saved under this department.\nConfirm?",
+                    parse_mode="Markdown",
+                    reply_markup=admin_confirm_keyboard())
+            else:
+                context.user_data["aq_subject"] = dept_key
+                context.user_data["aq_subject_label"] = dept_label
+                context.user_data["waiting_for"] = "aq_question_text"
+                await query.edit_message_text(
+                    f"📝 *Mock — {dept_label}*\n\nType the question text:\nType /cancel to abort.",
+                    parse_mode="Markdown")
+            return
+
+        # Build buttons for combined subjects
+        buttons = []
+        row = []
+        for s in combined:
+            row.append(InlineKeyboardButton(
+                f"{s.get('emoji','📘')} {s['subject_name']}",
+                callback_data=f"{prefix}{s['subject_key']}"))
+            if len(row) == 2:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        # Add option to upload to the whole dept as one subject
+        buttons.append([InlineKeyboardButton(
+            f"📂 All of {dept_label} (as one subject)",
+            callback_data=f"{prefix}{dept_key}")])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="aq_type_mock")])
+
+        await query.edit_message_text(
+            f"📋 *Mock Upload — {dept_label}*\n\n"
+            "Choose which subject to upload questions for:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data == "aq_stream_natural":
         exam_type = context.user_data.get("aq_exam_type", "entrance")
@@ -972,18 +1157,164 @@ async def show_stats(query):
 
 
 async def show_questions(query):
+    """Step 1: Show exam type picker for question browsing."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        total = (await (await db.execute("SELECT COUNT(*) FROM questions")).fetchone())[0]
+
+    # Build per-exam-type counts
     async with aiosqlite.connect(DATABASE_PATH) as db:
         cur = await db.execute(
-            "SELECT id,exam_type,stream,subject,year FROM questions ORDER BY id DESC LIMIT 20")
+            "SELECT exam_type, COUNT(*) FROM questions GROUP BY exam_type ORDER BY exam_type")
+        counts = {r[0]: r[1] for r in await cur.fetchall()}
+
+    exam_types = [
+        ("entrance", "🎓 Entrance"),
+        ("exit",     "🏛️ Exit"),
+        ("coc",      "🏅 CoC"),
+        ("driving",  "🚗 Driving"),
+        ("remedial", "📝 Remedial"),
+        ("mock",     "📋 Mock"),
+    ]
+
+    buttons = []
+    for key, label in exam_types:
+        cnt = counts.get(key, 0)
+        buttons.append([InlineKeyboardButton(
+            f"{label} ({cnt} q)", callback_data=f"vq_type_{key}"
+        )])
+    buttons.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_back")])
+
+    await query.edit_message_text(
+        f"📚 *View Questions*\n\nTotal in DB: *{total}*\n\nSelect exam type:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+async def show_questions_by_type(query, exam_type: str):
+    """Step 2: Show stream/dept picker or go straight to subjects."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        total = (await (await db.execute(
+            "SELECT COUNT(*) FROM questions WHERE exam_type=?", (exam_type,))).fetchone())[0]
+
+    if exam_type in ("entrance", "remedial"):
+        buttons = [
+            [InlineKeyboardButton("🔬 Natural Science", callback_data=f"vq_stream_{exam_type}_natural")],
+            [InlineKeyboardButton("📚 Social Science",  callback_data=f"vq_stream_{exam_type}_social")],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_view_questions")],
+        ]
+        await query.edit_message_text(
+            f"📚 *{exam_type.title()} Exam* — {total} questions\n\nSelect stream:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+
+    elif exam_type in ("exit", "coc"):
+        depts = await get_depts(exam_type)
+        buttons = []
+        for d in depts:
+            async with aiosqlite.connect(DATABASE_PATH) as db:
+                cnt = (await (await db.execute(
+                    "SELECT COUNT(*) FROM questions WHERE exam_type=? AND stream=?",
+                    (exam_type, d["dept_key"]))).fetchone())[0]
+            buttons.append([InlineKeyboardButton(
+                f"{d['emoji']} {d['dept_name']} ({cnt} q)",
+                callback_data=f"vq_dept_{exam_type}_{d['dept_key']}"
+            )])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_view_questions")])
+        await query.edit_message_text(
+            f"📚 *{exam_type.upper()} Exam* — {total} questions\n\nSelect department:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+
+    elif exam_type == "mock":
+        # Mock: show all streams (depts) that have questions
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cur = await db.execute(
+                "SELECT DISTINCT stream, COUNT(*) as cnt FROM questions "
+                "WHERE exam_type='mock' GROUP BY stream ORDER BY stream")
+            mock_streams = [{"stream": r[0], "cnt": r[1]} for r in await cur.fetchall()]
+
+        if not mock_streams:
+            await show_questions_list(query, "mock", "general")
+            return
+
+        buttons = []
+        for ms in mock_streams:
+            st = ms["stream"] or "general"
+            async with aiosqlite.connect(DATABASE_PATH) as db:
+                cur = await db.execute(
+                    "SELECT dept_name, emoji FROM departments WHERE dept_key=?", (st,))
+                dept_row = await cur.fetchone()
+            if dept_row:
+                label = f"{dept_row[1]} {dept_row[0]} ({ms['cnt']} q)"
+            elif st in ("general", "mock"):
+                label = f"📋 General / Mixed ({ms['cnt']} q)"
+            else:
+                label = f"📋 {st.replace('_', ' ').title()} ({ms['cnt']} q)"
+            buttons.append([InlineKeyboardButton(
+                label, callback_data=f"vq_dept_mock_{st}")])
+
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_view_questions")])
+        await query.edit_message_text(
+            f"📋 *Mock Exam* — {total} questions\n\nSelect department/stream:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+
+    else:
+        # driving — go straight to list
+        stream = "general"
+        await show_questions_list(query, exam_type, stream)
+
+
+async def show_questions_list(query, exam_type: str, stream: str, offset: int = 0):
+    """Step 3: Show actual questions for exam_type + stream."""
+    PAGE = 15
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        total = (await (await db.execute(
+            "SELECT COUNT(*) FROM questions WHERE exam_type=? AND stream=?",
+            (exam_type, stream))).fetchone())[0]
+        cur = await db.execute(
+            "SELECT id,subject,year,question_text FROM questions "
+            "WHERE exam_type=? AND stream=? ORDER BY subject,id LIMIT ? OFFSET ?",
+            (exam_type, stream, PAGE, offset))
         rows = await cur.fetchall()
-        total = (await (await db.execute("SELECT COUNT(*) FROM questions")).fetchone())[0]
+
     if not rows:
-        await query.edit_message_text("📚 No questions in database.", reply_markup=admin_back_keyboard())
+        await query.edit_message_text(
+            f"📚 No questions found for *{exam_type}/{stream}*.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data="admin_view_questions")]
+            ])
+        )
         return
-    text = "📚 *Questions* (last 20 of " + str(total) + ")\n\n"
+
+    text = f"📚 *{exam_type.title()} / {stream.replace('_',' ').title()}*\n"
+    text += f"Showing {offset+1}–{min(offset+PAGE, total)} of {total}\n\n"
     for r in rows:
-        text += "ID:" + str(r[0]) + " [" + str(r[1]) + "/" + str(r[2] or "") + "] " + str(r[3] or "") + " " + str(r[4] or "") + "\n"
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        q_preview = (r[3] or "")[:50].replace("*", "").replace("_", "")
+        text += f"🆔 {r[0]} | {(r[1] or '').replace('_',' ').title()} {r[2] or ''}\n{q_preview}...\n\n"
+
+    nav_buttons = []
+    if offset > 0:
+        nav_buttons.append(InlineKeyboardButton(
+            "◀️ Prev", callback_data=f"vq_page_{exam_type}_{stream}_{offset - PAGE}"))
+    if offset + PAGE < total:
+        nav_buttons.append(InlineKeyboardButton(
+            "Next ▶️", callback_data=f"vq_page_{exam_type}_{stream}_{offset + PAGE}"))
+
+    buttons = []
+    if nav_buttons:
+        buttons.append(nav_buttons)
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_view_questions")])
+
+    await query.edit_message_text(
+        text[:4000], parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
 
 
 async def list_subjects(query):
