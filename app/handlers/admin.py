@@ -456,10 +456,11 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             # Get dept info
             async with aiosqlite.connect(DATABASE_PATH) as db:
+                db.row_factory = aiosqlite.Row
                 cur = await db.execute(
                     "SELECT dept_name, emoji FROM departments WHERE dept_key=?", (dept_key,))
                 dept_row = await cur.fetchone()
-            dept_label = f"{dept_row[1]} {dept_row[0]}" if dept_row else dept_key.replace("_", " ").title()
+            dept_label = f"{dept_row['emoji']} {dept_row['dept_name']}" if dept_row else dept_key.replace("_", " ").title()
             all_subjects = []
 
         # Build subject list: subjects from subjects table for this dept/stream,
@@ -468,6 +469,7 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         # Strategy: look for subjects in subjects table with stream=dept_key (any exam_type)
         # OR show a nice list from the exit/coc subjects for that dept
         async with aiosqlite.connect(DATABASE_PATH) as db:
+            db.row_factory = aiosqlite.Row
             # Try mock subjects for this stream first
             cur = await db.execute(
                 "SELECT * FROM subjects WHERE exam_type='mock' AND stream=? ORDER BY subject_name",
