@@ -69,7 +69,11 @@ async def _get_mock_subjects() -> list:
         return result
 
 
-async def _get_mock_questions(subject_key: str, year=None, limit: int = 40) -> list:
+async def _get_mock_questions(subject_key: str, year=None, limit: int = 0) -> list:
+    """
+    Fetch mock questions for a subject.
+    limit=0 means no cap — return all available questions.
+    """
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         sql = "SELECT * FROM questions WHERE exam_type='mock' AND subject=?"
@@ -80,7 +84,9 @@ async def _get_mock_questions(subject_key: str, year=None, limit: int = 40) -> l
         cur = await db.execute(sql, params)
         rows = [dict(r) for r in await cur.fetchall()]
         random.shuffle(rows)
-        return rows[:limit]
+        if limit > 0:
+            return rows[:limit]
+        return rows  # all questions
 
 
 async def _get_mock_used(telegram_id: int, subject_key: str) -> int:
@@ -129,8 +135,11 @@ async def _increment_mock_used(telegram_id: int, subject_key: str):
 async def _is_subscribed(user: dict, subject_stream: str = None) -> bool:
     """
     Check if user has active subscription that grants unlimited mock access.
-    - Any subscription grants full mock access.
-    - Subscribed to exit/coc for dept X → full access to mock subjects with stream=X.
+
+    Rules:
+    - User subscribed to exit/coc dept X  →  free unlimited mock for stream=X
+    - User subscribed to any exam type    →  free unlimited mock for ALL streams
+    - subject_stream=None                 →  just check if any active sub exists
     """
     now = datetime.utcnow().isoformat()
     if not user.get("is_subscribed"):
@@ -138,6 +147,43 @@ async def _is_subscribed(user: dict, subject_stream: str = None) -> bool:
     expiry = user.get("subscription_expiry") or ""
     if expiry and expiry <= now:
         return False
+
+    # Active subscription — check stream match if a subject_stream is given
+    if subject_stream is None:
+        return True   # caller only wants to know if any sub is active
+
+    # Any active subscription grants full mock access
+    return True
+
+
+async def _mock_access_for_stream(user: dict, subject_stream: str) -> bool:
+    """
+    Returns True if user's subscription covers this mock subject's stream.
+    - Subscribed to exit dept X  → covers mock stream X
+    - Subscribed to coc dept X   → covers mock stream X
+    - Any other subscription     → covers ALL mock streams
+    """
+    now = datetime.utcnow().isoformat()
+    if not user.get("is_subscribed"):
+        return False
+    expiry = user.get("subscription_expiry") or ""
+    if expiry and expiry <= now:
+        return False
+
+    sub_exam   = user.get("subscribed_exam_type", "")
+    sub_stream = user.get("subscribed_stream", "")
+    sub_dept   = user.get("subscribed_dept", "")
+
+    # exit/coc subscription: check if dept matches the subject's stream
+    if sub_exam in ("exit", "coc"):
+        linked = sub_dept or sub_stream
+        if linked and subject_stream and linked == subject_stream:
+            return True
+        # If subscribed to a different dept, still grant mock access
+        # (any subscription = full mock access per business rule)
+        return True
+
+    # entrance/remedial/driving subscription → full mock access
     return True
 
 
@@ -385,17 +431,28 @@ async def mock_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not subscribed and used >= FREE_MOCK_QUESTIONS:
         await query.edit_message_text(
             "📚 *Free Questions Used Up!*\n\n"
-            f"You've used all *{FREE_MOCK_QUESTIONS} free questions* for this subject.",
+            f"You've used all *{FREE_MOCK_QUESTIONS} free questions* for this subject.\n\n"
+            "Subscribe to get:\n"
+            "  ✅ Unlimited mock exam questions\n"
+            "  ✅ All subjects & departments\n"
+            "  ✅ Detailed explanations\n"
+            "  ✅ Full leaderboard access",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("💎 Subscribe Now", callback_data="subscribe")],
+                [InlineKeyboardButton("🎟️ Redeem Code",  callback_data="redeem_menu")],
                 [InlineKeyboardButton("⬅️ Back", callback_data="exam_mock")],
             ])
         )
         return
 
-    max_q = 40 if subscribed else (FREE_MOCK_QUESTIONS - used)
-    questions = await _get_mock_questions(subject_key, year=year, limit=max_q)
+    if subscribed:
+        # Subscribed: load ALL available questions (up to 100 per session)
+        questions = await _get_mock_questions(subject_key, year=year, limit=100)
+    else:
+        # Free: only remaining free questions
+        remaining_free = FREE_MOCK_QUESTIONS - used
+        questions = await _get_mock_questions(subject_key, year=year, limit=remaining_free)
 
     if not questions:
         await query.edit_message_text(
