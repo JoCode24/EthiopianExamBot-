@@ -32,7 +32,7 @@ async def get_user(telegram_id: int):
 
 async def get_questions(exam_type: str, subject_key: str,
                         stream: str = None, year: int = None,
-                        limit: int = 40) -> list:
+                        limit: int = 0) -> list:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         query = "SELECT * FROM questions WHERE exam_type=? AND subject=?"
@@ -47,7 +47,9 @@ async def get_questions(exam_type: str, subject_key: str,
         rows = await cur.fetchall()
         questions = [dict(r) for r in rows]
         random.shuffle(questions)
-        return questions[:limit]
+        if limit > 0:
+            return questions[:limit]
+        return questions
 
 
 async def get_subjects_for(exam_type: str, stream: str = None) -> list:
@@ -232,7 +234,7 @@ async def start_exam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     can_free, used = await can_do_free_for_subject(tid, subject_key)
 
     if full_access:
-        max_q = 40
+        max_q = 0  # 0 = no cap, return all available questions
     elif can_free:
         max_q = FREE_QUESTIONS_PER_SUBJECT - used  # Only remaining free questions
     else:
