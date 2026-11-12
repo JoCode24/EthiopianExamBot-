@@ -6,11 +6,13 @@ def admin_main_keyboard(role="super"):
         [InlineKeyboardButton("➕ Add Question (Manual)", callback_data="admin_add_question")],
         [InlineKeyboardButton("📄 Upload Question File (.txt)", callback_data="admin_upload_file")],
         [InlineKeyboardButton("✏️ Edit Question", callback_data="admin_edit_question")],
-        [InlineKeyboardButton("🗑️ Delete Question", callback_data="admin_delete_question")],
+        [InlineKeyboardButton("🗑️ Delete Question", callback_data="admin_delete_question"),
+         InlineKeyboardButton("🗑️🗑️ Bulk Delete", callback_data="admin_bulk_delete")],
         [InlineKeyboardButton("❓ View Questions", callback_data="admin_view_questions")],
         [InlineKeyboardButton("📚 Manage Subjects", callback_data="admin_manage_subjects")],
         [InlineKeyboardButton("🏛️ Manage Departments", callback_data="admin_manage_depts")],
         [InlineKeyboardButton("👥 View Users", callback_data="admin_view_users")],
+        [InlineKeyboardButton("🔗 Referral Stats", callback_data="admin_referral_stats")],
         [InlineKeyboardButton("💳 Grant Subscription", callback_data="admin_grant_sub")],
         [InlineKeyboardButton("🎁 Giveaway Free Access", callback_data="admin_giveaway")],
         [InlineKeyboardButton("📢 Broadcast Message", callback_data="admin_broadcast")],
@@ -123,4 +125,31 @@ def receipt_action_keyboard(payment_id, telegram_id, exam_type, stream, dept):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Approve - Grant Access", callback_data=ok_data)],
         [InlineKeyboardButton("❌ Reject", callback_data=no_data)],
+    ])
+
+
+# ── Bulk Delete Keyboards ─────────────────────────────────────────────────────
+
+def bulk_delete_main_keyboard():
+    """Main bulk delete options menu."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📂 By Exam Type (delete all of a type)", callback_data="bd_by_type")],
+        [InlineKeyboardButton("📚 By Subject (delete a subject's questions)", callback_data="bd_by_subject")],
+        [InlineKeyboardButton("📅 By Year (delete questions of a year)", callback_data="bd_by_year")],
+        [InlineKeyboardButton("📂+📅 By Subject & Year", callback_data="bd_by_subject_year")],
+        [InlineKeyboardButton("☢️ Delete ALL Questions", callback_data="bd_all_confirm")],
+        [InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_back")],
+    ])
+
+
+def bulk_delete_exam_type_keyboard():
+    """Pick exam type for bulk delete."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎓 Entrance", callback_data="bd_type_entrance"),
+         InlineKeyboardButton("🏛️ Exit", callback_data="bd_type_exit")],
+        [InlineKeyboardButton("🏅 CoC", callback_data="bd_type_coc"),
+         InlineKeyboardButton("🚗 Driving", callback_data="bd_type_driving")],
+        [InlineKeyboardButton("📝 Remedial", callback_data="bd_type_remedial"),
+         InlineKeyboardButton("📋 Mock", callback_data="bd_type_mock")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_bulk_delete")],
     ])
