@@ -6,6 +6,7 @@ from app.keyboards.admin_menu import (
     build_subject_keyboard, build_dept_keyboard,
     manage_subjects_keyboard, manage_depts_keyboard,
     manage_admins_keyboard, giveaway_keyboard, receipt_action_keyboard,
+    bulk_delete_main_keyboard, bulk_delete_exam_type_keyboard,
 )
 from app.utils.access import is_any_admin, get_admin_role
 from app.utils.logger import logger
@@ -194,6 +195,189 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text(
             "🗑️ *Delete Question*\n\nSend the question ID number.\n\nType /cancel to abort.",
             parse_mode="Markdown")
+
+    # ── Bulk Delete ────────────────────────────────────────────────────────
+    elif data == "admin_bulk_delete":
+        await show_bulk_delete_menu(query)
+
+    elif data == "bd_by_type":
+        await query.edit_message_text(
+            "🗑️🗑️ *Bulk Delete — By Exam Type*\n\n"
+            "Choose which exam type to delete ALL questions for:",
+            parse_mode="Markdown",
+            reply_markup=bulk_delete_exam_type_keyboard())
+
+    elif data.startswith("bd_type_"):
+        exam_type = data.replace("bd_type_", "")
+        context.user_data["bd_exam_type"] = exam_type
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            count = (await (await db.execute(
+                "SELECT COUNT(*) FROM questions WHERE exam_type=?", (exam_type,))).fetchone())[0]
+        await query.edit_message_text(
+            f"⚠️ *Confirm Bulk Delete*\n\n"
+            f"You are about to delete ALL *{count} questions* for exam type: *{exam_type.title()}*\n\n"
+            "This cannot be undone!\n\n"
+            "Type `YES DELETE` to confirm, or /cancel to abort.",
+            parse_mode="Markdown")
+        context.user_data["waiting_for"] = "bd_confirm_type"
+
+    elif data == "bd_by_subject":
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cur = await db.execute(
+                "SELECT subject, COUNT(*) as cnt FROM questions "
+                "GROUP BY subject ORDER BY subject")
+            rows = await cur.fetchall()
+        if not rows:
+            await query.edit_message_text("No questions found.", reply_markup=bulk_delete_main_keyboard())
+            return
+        buttons = []
+        for subj, cnt in rows:
+            label = (subj or "unknown").replace("_", " ").title()
+            buttons.append([InlineKeyboardButton(
+                f"📚 {label} ({cnt})", callback_data=f"bd_subj_{subj}")])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_bulk_delete")])
+        await query.edit_message_text(
+            "🗑️🗑️ *Bulk Delete — Choose Subject*\n\n"
+            "Select a subject to delete ALL its questions:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif data.startswith("bd_subj_"):
+        subj = data.replace("bd_subj_", "")
+        context.user_data["bd_subject"] = subj
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            count = (await (await db.execute(
+                "SELECT COUNT(*) FROM questions WHERE subject=?", (subj,))).fetchone())[0]
+        await query.edit_message_text(
+            f"⚠️ *Confirm Bulk Delete*\n\n"
+            f"Delete ALL *{count} questions* for subject: *{subj.replace('_',' ').title()}*\n\n"
+            "This cannot be undone!\n\n"
+            "Type `YES DELETE` to confirm, or /cancel to abort.",
+            parse_mode="Markdown")
+        context.user_data["waiting_for"] = "bd_confirm_subject"
+
+    elif data == "bd_by_year":
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cur = await db.execute(
+                "SELECT year, COUNT(*) FROM questions WHERE year IS NOT NULL "
+                "GROUP BY year ORDER BY year DESC")
+            rows = await cur.fetchall()
+        if not rows:
+            await query.edit_message_text(
+                "No questions with year found.", reply_markup=bulk_delete_main_keyboard())
+            return
+        buttons = []
+        row = []
+        for yr, cnt in rows:
+            row.append(InlineKeyboardButton(
+                f"📅 {yr} ({cnt})", callback_data=f"bd_year_{yr}"))
+            if len(row) == 3:
+                buttons.append(row); row = []
+        if row: buttons.append(row)
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_bulk_delete")])
+        await query.edit_message_text(
+            "🗑️🗑️ *Bulk Delete — Choose Year*\n\nSelect a year to delete ALL its questions:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif data.startswith("bd_year_"):
+        year = data.replace("bd_year_", "")
+        context.user_data["bd_year"] = year
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            count = (await (await db.execute(
+                "SELECT COUNT(*) FROM questions WHERE year=?", (year,))).fetchone())[0]
+        await query.edit_message_text(
+            f"⚠️ *Confirm Bulk Delete*\n\n"
+            f"Delete ALL *{count} questions* for year: *{year}*\n\n"
+            "This cannot be undone!\n\n"
+            "Type `YES DELETE` to confirm, or /cancel to abort.",
+            parse_mode="Markdown")
+        context.user_data["waiting_for"] = "bd_confirm_year"
+
+    elif data == "bd_by_subject_year":
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cur = await db.execute(
+                "SELECT subject, COUNT(*) as cnt FROM questions "
+                "GROUP BY subject ORDER BY subject")
+            rows = await cur.fetchall()
+        if not rows:
+            await query.edit_message_text("No questions found.", reply_markup=bulk_delete_main_keyboard())
+            return
+        buttons = []
+        for subj, cnt in rows:
+            label = (subj or "unknown").replace("_", " ").title()
+            buttons.append([InlineKeyboardButton(
+                f"📚 {label} ({cnt})", callback_data=f"bd_sy_subj_{subj}")])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_bulk_delete")])
+        await query.edit_message_text(
+            "🗑️🗑️ *Bulk Delete — Subject + Year*\n\nFirst choose a subject:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif data.startswith("bd_sy_subj_"):
+        subj = data.replace("bd_sy_subj_", "")
+        context.user_data["bd_sy_subject"] = subj
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cur = await db.execute(
+                "SELECT year, COUNT(*) FROM questions WHERE subject=? AND year IS NOT NULL "
+                "GROUP BY year ORDER BY year DESC", (subj,))
+            rows = await cur.fetchall()
+        if not rows:
+            await query.edit_message_text(
+                f"No years found for *{subj.replace('_',' ').title()}*.",
+                parse_mode="Markdown",
+                reply_markup=bulk_delete_main_keyboard())
+            return
+        buttons = []
+        row = []
+        for yr, cnt in rows:
+            row.append(InlineKeyboardButton(
+                f"📅 {yr} ({cnt})", callback_data=f"bd_sy_year_{yr}"))
+            if len(row) == 3:
+                buttons.append(row); row = []
+        if row: buttons.append(row)
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="bd_by_subject_year")])
+        await query.edit_message_text(
+            f"📚 *{subj.replace('_',' ').title()}* — choose year:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif data.startswith("bd_sy_year_"):
+        yr = data.replace("bd_sy_year_", "")
+        subj = context.user_data.get("bd_sy_subject", "")
+        context.user_data["bd_year"] = yr
+        context.user_data["bd_subject"] = subj
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            count = (await (await db.execute(
+                "SELECT COUNT(*) FROM questions WHERE subject=? AND year=?",
+                (subj, yr))).fetchone())[0]
+        await query.edit_message_text(
+            f"⚠️ *Confirm Bulk Delete*\n\n"
+            f"Delete ALL *{count} questions* for:\n"
+            f"📚 Subject: *{subj.replace('_',' ').title()}*\n"
+            f"📅 Year: *{yr}*\n\n"
+            "This cannot be undone!\n\nType `YES DELETE` to confirm, or /cancel to abort.",
+            parse_mode="Markdown")
+        context.user_data["waiting_for"] = "bd_confirm_subject_year"
+
+    elif data == "bd_all_confirm":
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            count = (await (await db.execute("SELECT COUNT(*) FROM questions")).fetchone())[0]
+        await query.edit_message_text(
+            f"☢️ *DANGER: Delete ALL Questions*\n\n"
+            f"This will permanently delete ALL *{count} questions* from the database!\n\n"
+            "Type `YES DELETE ALL` to confirm, or /cancel to abort.",
+            parse_mode="Markdown")
+        context.user_data["waiting_for"] = "bd_confirm_all"
+
+    # ── Referral Stats ─────────────────────────────────────────────────────
+    elif data == "admin_referral_stats":
+        await show_referral_stats(query)
+
+    elif data.startswith("admin_ref_page_"):
+        page = int(data.replace("admin_ref_page_", ""))
+        await show_referral_stats(query, page=page)
+
     elif data == "admin_upload_file":
         context.user_data["waiting_for"] = "question_file"
         await query.edit_message_text(
@@ -966,6 +1150,93 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("✅ Question " + str(qid) + " deleted.", reply_markup=admin_back_keyboard())
         context.user_data.clear()
 
+    # ── Bulk Delete Confirmations ──────────────────────────────────────────
+    elif waiting == "bd_confirm_type":
+        if text.strip() != "YES DELETE":
+            await update.message.reply_text(
+                "❌ Cancelled. You must type exactly `YES DELETE` to confirm.",
+                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            context.user_data.clear()
+            return
+        exam_type = context.user_data.get("bd_exam_type", "")
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cur = await db.execute("DELETE FROM questions WHERE exam_type=?", (exam_type,))
+            await db.commit()
+            deleted = cur.rowcount
+        await update.message.reply_text(
+            f"✅ Deleted *{deleted} questions* for exam type: *{exam_type.title()}*",
+            parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        context.user_data.clear()
+
+    elif waiting == "bd_confirm_subject":
+        if text.strip() != "YES DELETE":
+            await update.message.reply_text(
+                "❌ Cancelled. You must type exactly `YES DELETE` to confirm.",
+                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            context.user_data.clear()
+            return
+        subj = context.user_data.get("bd_subject", "")
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cur = await db.execute("DELETE FROM questions WHERE subject=?", (subj,))
+            await db.commit()
+            deleted = cur.rowcount
+        await update.message.reply_text(
+            f"✅ Deleted *{deleted} questions* for subject: *{subj.replace('_',' ').title()}*",
+            parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        context.user_data.clear()
+
+    elif waiting == "bd_confirm_year":
+        if text.strip() != "YES DELETE":
+            await update.message.reply_text(
+                "❌ Cancelled. You must type exactly `YES DELETE` to confirm.",
+                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            context.user_data.clear()
+            return
+        yr = context.user_data.get("bd_year", "")
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cur = await db.execute("DELETE FROM questions WHERE year=?", (yr,))
+            await db.commit()
+            deleted = cur.rowcount
+        await update.message.reply_text(
+            f"✅ Deleted *{deleted} questions* for year: *{yr}*",
+            parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        context.user_data.clear()
+
+    elif waiting == "bd_confirm_subject_year":
+        if text.strip() != "YES DELETE":
+            await update.message.reply_text(
+                "❌ Cancelled. You must type exactly `YES DELETE` to confirm.",
+                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            context.user_data.clear()
+            return
+        subj = context.user_data.get("bd_subject", "")
+        yr = context.user_data.get("bd_year", "")
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cur = await db.execute(
+                "DELETE FROM questions WHERE subject=? AND year=?", (subj, yr))
+            await db.commit()
+            deleted = cur.rowcount
+        await update.message.reply_text(
+            f"✅ Deleted *{deleted} questions* for *{subj.replace('_',' ').title()}* / year *{yr}*",
+            parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        context.user_data.clear()
+
+    elif waiting == "bd_confirm_all":
+        if text.strip() != "YES DELETE ALL":
+            await update.message.reply_text(
+                "❌ Cancelled. You must type exactly `YES DELETE ALL` to confirm.",
+                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            context.user_data.clear()
+            return
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cur = await db.execute("DELETE FROM questions")
+            await db.commit()
+            deleted = cur.rowcount
+        await update.message.reply_text(
+            f"☢️ Deleted ALL *{deleted} questions* from the database.",
+            parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        context.user_data.clear()
+
     elif waiting == "giveaway_info":
         parts = [p.strip() for p in text.split("|")]
         if len(parts) != 2:
@@ -1497,3 +1768,107 @@ async def reject_receipt(query, context, data):
             parse_mode="Markdown")
     except Exception:
         pass
+
+# ── Bulk Delete Menu ──────────────────────────────────────────────────────────
+
+async def show_bulk_delete_menu(query):
+    """Show the main bulk delete options."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        total = (await (await db.execute("SELECT COUNT(*) FROM questions")).fetchone())[0]
+        cur = await db.execute(
+            "SELECT exam_type, COUNT(*) FROM questions GROUP BY exam_type ORDER BY exam_type")
+        type_counts = {r[0]: r[1] for r in await cur.fetchall()}
+
+    type_lines = "\n".join(
+        f"  • {et.title()}: {cnt}" for et, cnt in type_counts.items()
+    ) if type_counts else "  (no questions)"
+
+    await query.edit_message_text(
+        f"🗑️🗑️ *Bulk Delete Questions*\n\n"
+        f"Total questions in DB: *{total}*\n\n"
+        f"By type:\n{type_lines}\n\n"
+        "Choose a delete option:",
+        parse_mode="Markdown",
+        reply_markup=bulk_delete_main_keyboard())
+
+
+# ── Referral Stats ────────────────────────────────────────────────────────────
+
+async def show_referral_stats(query, page: int = 0):
+    """Show referral leaderboard — who referred how many, and how many subscribed."""
+    page_size = 10
+    offset = page * page_size
+
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # Count how many people each user referred
+        cur = await db.execute("""
+            SELECT
+                u.telegram_id,
+                u.full_name,
+                u.username,
+                u.referral_code,
+                u.referral_count,
+                COUNT(r.telegram_id) AS actual_referred,
+                SUM(CASE WHEN r.is_subscribed=1 THEN 1 ELSE 0 END) AS referred_subscribed
+            FROM users u
+            LEFT JOIN users r ON r.referred_by = u.referral_code
+            WHERE u.referral_count > 0 OR EXISTS (
+                SELECT 1 FROM users r2 WHERE r2.referred_by = u.referral_code
+            )
+            GROUP BY u.telegram_id
+            ORDER BY actual_referred DESC, referred_subscribed DESC
+            LIMIT ? OFFSET ?
+        """, (page_size + 1, offset))
+        rows = [dict(r) for r in await cur.fetchall()]
+
+        # Total users + total subscribed
+        total_users = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
+        total_sub = (await (await db.execute(
+            "SELECT COUNT(*) FROM users WHERE is_subscribed=1")).fetchone())[0]
+        total_referrers = (await (await db.execute(
+            "SELECT COUNT(DISTINCT referred_by) FROM users WHERE referred_by IS NOT NULL")).fetchone())[0]
+
+    has_more = len(rows) > page_size
+    rows = rows[:page_size]
+
+    if not rows:
+        await query.edit_message_text(
+            f"🔗 *Referral Stats*\n\n"
+            f"👥 Total users: *{total_users}*\n"
+            f"💎 Subscribed: *{total_sub}*\n\n"
+            "No referrals recorded yet.",
+            parse_mode="Markdown",
+            reply_markup=admin_back_keyboard())
+        return
+
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, r in enumerate(rows):
+        rank = medals[i] if i < 3 else f"{offset + i + 1}."
+        name = (r.get("full_name") or r.get("username") or "Unknown")[:20]
+        referred = r.get("actual_referred") or 0
+        subscribed = r.get("referred_subscribed") or 0
+        lines.append(
+            f"{rank} *{name}*\n"
+            f"   👥 Referred: {referred}  |  💎 Subscribed: {subscribed}"
+        )
+
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("◀️ Prev", callback_data=f"admin_ref_page_{page-1}"))
+    if has_more:
+        nav_buttons.append(InlineKeyboardButton("Next ▶️", callback_data=f"admin_ref_page_{page+1}"))
+
+    keyboard = []
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    keyboard.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_back")])
+
+    await query.edit_message_text(
+        f"🔗 *Referral Stats*\n\n"
+        f"👥 Total users: *{total_users}*  |  💎 Subscribed: *{total_sub}*\n"
+        f"🔗 Active referrers: *{total_referrers}*\n\n"
+        + "\n\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard))
