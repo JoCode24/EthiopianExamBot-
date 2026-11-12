@@ -81,7 +81,7 @@ def main():
     # ── Admin panel ───────────────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(
         admin_button_handler,
-        pattern=r"^(admin_|aq_subject_|edit_q_field_|rcpt_ok_|rcpt_no_|vq_)",
+        pattern=r"^(admin_|aq_subject_|edit_q_field_|rcpt_ok_|rcpt_no_|vq_|bd_)",
     ))
 
     # ── Subscription flow ─────────────────────────────────────────────────
