@@ -83,26 +83,33 @@ def _stream_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-async def _dept_keyboard_from_db(exam_type: str, stream: str) -> InlineKeyboardMarkup:
-    """Build dept keyboard from the departments table."""
+async def _dept_keyboard_from_db(exam_type: str, stream) -> InlineKeyboardMarkup:
+    """Build dept keyboard from the departments table (for exit / coc)."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT dept_key, dept_name, emoji FROM departments "
-            "WHERE exam_type=? OR exam_type IS NULL ORDER BY dept_name",
+            "WHERE exam_type=? ORDER BY dept_name",
             (exam_type,)
         )
         depts = [dict(r) for r in await cur.fetchall()]
 
     if not depts:
-        # Fallback hardcoded lists
-        natural = [("biology","Biology","🔬"),("chemistry","Chemistry","⚗️"),
-                   ("physics","Physics","⚡"),("math","Mathematics","📐"),
-                   ("agriculture","Agriculture","🌾")]
-        social  = [("history","History","📜"),("geography","Geography","🗺️"),
-                   ("economics","Economics","💹"),("civic","Civic","🏛️"),
-                   ("business","Business","💼")]
-        depts_raw = natural if stream == "natural" else social
+        # Fallback hardcoded lists per exam type
+        exit_depts = [
+            ("nursing","Nursing","🩺"),("medicine","Medicine","⚕️"),
+            ("pharmacy","Pharmacy","💊"),("engineering","Engineering","⚙️"),
+            ("accounting","Accounting","📊"),("law","Law","⚖️"),
+        ]
+        coc_depts = [
+            ("coc_electrical","Electrical","⚡"),("coc_construction","Construction","🏗️"),
+            ("coc_it","IT","💻"),("coc_welding","Welding","🔧"),
+            ("coc_auto","Automotive","🚗"),("coc_textile","Textile","🧵"),
+        ]
+        if exam_type == "coc":
+            depts_raw = coc_depts
+        else:
+            depts_raw = exit_depts
         depts = [{"dept_key": k, "dept_name": n, "emoji": e} for k, n, e in depts_raw]
 
     buttons = [
@@ -114,6 +121,20 @@ async def _dept_keyboard_from_db(exam_type: str, stream: str) -> InlineKeyboardM
     ]
     buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_sub")])
     return InlineKeyboardMarkup(buttons)
+
+
+# ─────────────────────── Cancel subscription flow ────────────────────────────
+
+async def cancel_sub_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    # Clear any pending subscription state
+    for key in ("sub_exam_type", "sub_stream", "sub_dept", "waiting_for"):
+        context.user_data.pop(key, None)
+    await query.edit_message_text(
+        "❌ *Subscription cancelled.*\n\nSend /start to return to the main menu.",
+        parse_mode="Markdown",
+    )
 
 
 # ─────────────────────── /subscribe entry ────────────────────────────────────
@@ -145,13 +166,22 @@ async def sub_exam_select_handler(update: Update, context: ContextTypes.DEFAULT_
     context.user_data["sub_stream"]    = None
     context.user_data["sub_dept"]      = None
 
-    if exam_type in ("entrance", "exit"):
+    if exam_type in ("entrance", "remedial"):
+        # Stream only (natural / social) → then straight to bank, NO dept step
         await query.edit_message_text(
             f"📖 *{exam_type.capitalize()} Exam*\n\nSelect your stream:",
             parse_mode="Markdown",
             reply_markup=_stream_keyboard(),
         )
+    elif exam_type in ("exit", "coc"):
+        # Department only (from DB) → straight to bank, NO stream step
+        await query.edit_message_text(
+            f"🏛️ *{exam_type.upper()} Exam*\n\nSelect your department:",
+            parse_mode="Markdown",
+            reply_markup=await _dept_keyboard_from_db(exam_type, None),
+        )
     else:
+        # driving, mock → straight to bank, no selection at all
         await _show_bank_info(query, context, exam_type, None, None)
 
 
@@ -164,12 +194,10 @@ async def sub_stream_select(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     stream    = query.data.replace("sub_stream_", "")
     exam_type = context.user_data.get("sub_exam_type", "entrance")
     context.user_data["sub_stream"] = stream
+    context.user_data["sub_dept"]   = None
 
-    await query.edit_message_text(
-        f"🏫 Stream: *{stream.capitalize()}*\n\nSelect your department:",
-        parse_mode="Markdown",
-        reply_markup=await _dept_keyboard_from_db(exam_type, stream),
-    )
+    # entrance / remedial: stream is enough → go straight to bank
+    await _show_bank_info(query, context, exam_type, stream, None)
 
 
 # ─────────────────────── Step 2b: dept ───────────────────────────────────────
@@ -180,10 +208,10 @@ async def sub_dept_select(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     dept      = query.data.replace("sub_dept_", "")
     exam_type = context.user_data.get("sub_exam_type")
-    stream    = context.user_data.get("sub_stream")
-    context.user_data["sub_dept"] = dept
+    context.user_data["sub_dept"]   = dept
+    context.user_data["sub_stream"] = None  # exit/coc have no stream
 
-    await _show_bank_info(query, context, exam_type, stream, dept)
+    await _show_bank_info(query, context, exam_type, None, dept)
 
 
 # ─────────────────────── Step 3: bank info ───────────────────────────────────
