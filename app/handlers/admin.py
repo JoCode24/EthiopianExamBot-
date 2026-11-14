@@ -688,11 +688,16 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         parsed    = context.user_data.get("parsed_questions", [])
         exam_type = context.user_data.get("upload_exam_type", "entrance")
         stream    = context.user_data.get("upload_stream", "natural")
+        # Ask for year before confirming
+        context.user_data["waiting_for"] = "upload_year"
         await query.edit_message_text(
-            "✅ Ready to save " + str(len(parsed)) + " questions\n\n"
-            "Subject: " + subject.replace("_", " ").title() + "\n"
-            "Exam: " + exam_type.title() + " / " + stream + "\n\nConfirm?",
-            reply_markup=admin_confirm_keyboard())
+            "📅 *Enter the exam year for these " + str(len(parsed)) + " questions*\n\n"
+            "Examples: `2015`, `2016`, `2017` (Ethiopian Calendar)\n"
+            "Or type `skip` to save without a year.\n\n"
+            "Subject: *" + subject.replace("_", " ").title() + "*\n"
+            "Exam: *" + exam_type.title() + " / " + stream + "*",
+            parse_mode="Markdown"
+        )
 
     elif data == "aq_confirm_save":
         if context.user_data.get("parsed_questions"):
@@ -753,6 +758,42 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data["aq_reference"]  = "" if text.lower() == "none" else text
         context.user_data["waiting_for"]   = "aq_year"
         await update.message.reply_text("✅ OK. Type *exam year* (e.g. 2023) or `none`:", parse_mode="Markdown")
+
+    elif waiting == "upload_year":
+        # Year for bulk question upload
+        if text.lower() == "skip":
+            context.user_data["upload_year"] = None
+        else:
+            try:
+                yr = int(text)
+                if not (1900 <= yr <= 2100):
+                    await update.message.reply_text(
+                        "⚠️ Please enter a valid year (e.g. `2015`) or type `skip`.",
+                        parse_mode="Markdown")
+                    return
+                context.user_data["upload_year"] = yr
+            except ValueError:
+                await update.message.reply_text(
+                    "⚠️ Not a valid year. Enter a number like `2016` or type `skip`.",
+                    parse_mode="Markdown")
+                return
+        context.user_data["waiting_for"] = None
+        # Show confirmation
+        parsed    = context.user_data.get("parsed_questions", [])
+        exam_type = context.user_data.get("upload_exam_type", "entrance")
+        stream    = context.user_data.get("upload_stream", "natural")
+        subject   = context.user_data.get("upload_subject", "")
+        yr_label  = str(context.user_data.get("upload_year") or "No year")
+        await update.message.reply_text(
+            "✅ *Ready to save!*\n\n"
+            "Questions: *" + str(len(parsed)) + "*\n"
+            "Exam: *" + exam_type.title() + "*\n"
+            "Stream / Dept: *" + stream + "*\n"
+            "Subject: *" + subject.replace("_", " ").title() + "*\n"
+            "Year: *" + yr_label + "*\n\n"
+            "Confirm save?",
+            parse_mode="Markdown",
+            reply_markup=admin_confirm_keyboard())
 
     elif waiting == "aq_year":
         try:
@@ -1143,17 +1184,32 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif waiting == "edit_bank_info":
         parts = [p.strip() for p in text.split("|")]
         if len(parts) != 3:
-            await update.message.reply_text("⚠️ Format: `bank_name|account_number|account_name`", parse_mode="Markdown")
+            await update.message.reply_text(
+                "⚠️ Format: `bank_name|account_number|account_holder`\n\n"
+                "Example: `CBE|1000482304102|Yohanes Alemu`",
+                parse_mode="Markdown")
             return
-        bank_name, acc_num, acc_name = parts
+        bank_name, acc_num, acc_holder = parts
         async with aiosqlite.connect(DATABASE_PATH) as db:
-            await db.execute(
-                "INSERT INTO bank_accounts (bank_name,account_number,account_name) VALUES (?,?,?) "
-                "ON CONFLICT(bank_name) DO UPDATE SET account_number=excluded.account_number, account_name=excluded.account_name",
-                (bank_name, acc_num, acc_name))
+            # Try insert; if bank already exists update it
+            existing = await (await db.execute(
+                "SELECT id FROM bank_accounts WHERE bank_name=?", (bank_name,))).fetchone()
+            if existing:
+                await db.execute(
+                    "UPDATE bank_accounts SET account_number=?, account_holder=?, is_active=1 "
+                    "WHERE bank_name=?",
+                    (acc_num, acc_holder, bank_name))
+            else:
+                await db.execute(
+                    "INSERT INTO bank_accounts (bank_name, account_number, account_holder, is_active) "
+                    "VALUES (?,?,?,1)",
+                    (bank_name, acc_num, acc_holder))
             await db.commit()
         await update.message.reply_text(
-            "✅ *Bank updated!*\n" + bank_name + ": " + acc_num + " / " + acc_name,
+            "✅ *Bank saved!*\n\n"
+            "🏦 " + bank_name + "\n"
+            "Account: `" + acc_num + "`\n"
+            "Holder: " + acc_holder,
             parse_mode="Markdown", reply_markup=admin_back_keyboard())
         context.user_data.clear()
 
@@ -1204,9 +1260,10 @@ async def save_bulk_questions(query, context):
     exam_type = context.user_data.get("upload_exam_type", "entrance")
     stream    = context.user_data.get("upload_stream", "natural")
     subject   = context.user_data.get("upload_subject", "")
+    year      = context.user_data.get("upload_year")  # int or None — set by upload_year handler
 
-    if exam_type in ("exit", "coc") and not stream:
-        await query.edit_message_text("⚠️ Department not set. Start upload again.", reply_markup=admin_back_keyboard())
+    if not parsed:
+        await query.edit_message_text("⚠️ No questions to save. Start upload again.", reply_markup=admin_back_keyboard())
         context.user_data.clear()
         return
 
@@ -1221,19 +1278,24 @@ async def save_bulk_questions(query, context):
                     (exam_type, stream, subject or q.get("subject", ""),
                      q["question_text"], q["option_a"], q["option_b"],
                      q["option_c"], q["option_d"], q["correct_answer"],
-                     q.get("explanation", ""), q.get("reference", ""), q.get("year")))
+                     q.get("explanation", ""), q.get("reference", ""),
+                     year if year is not None else q.get("year")))
                 saved += 1
             except Exception as e:
                 logger.error(f"save_bulk_questions error: {e}")
                 failed += 1
         await db.commit()
 
+    yr_label = str(year) if year else "No year"
     context.user_data.clear()
     await query.edit_message_text(
         f"✅ *Upload Complete!*\n\n"
-        f"Saved: *{saved}*\nFailed: *{failed}*\n\n"
+        f"✅ Saved: *{saved}*\n"
+        f"❌ Failed: *{failed}*\n\n"
         f"Exam: *{exam_type.title()}*\n"
-        f"Stream/Dept: *{stream}*\nSubject: *{subject}*",
+        f"Stream / Dept: *{stream}*\n"
+        f"Subject: *{subject.replace(chr(95),' ').title()}*\n"
+        f"Year: *{yr_label}*",
         parse_mode="Markdown",
         reply_markup=admin_back_keyboard())
 
@@ -1441,24 +1503,39 @@ async def list_giveaways(query):
 async def show_pending_receipts(query, context):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cur  = await db.execute(
-            "SELECT * FROM payment_receipts WHERE status='pending' ORDER BY submitted_at DESC LIMIT 10")
+        cur = await db.execute(
+            """SELECT pr.*, u.full_name, u.username
+               FROM payment_receipts pr
+               LEFT JOIN users u ON pr.telegram_id = u.telegram_id
+               WHERE pr.status = 'pending'
+               ORDER BY pr.submitted_at DESC LIMIT 20""")
         rows = [dict(r) for r in await cur.fetchall()]
+
     if not rows:
-        await query.edit_message_text("✅ No pending receipts.", reply_markup=admin_back_keyboard())
+        await query.edit_message_text(
+            "✅ No pending receipts at this time.",
+            reply_markup=admin_back_keyboard())
         return
+
+    # Send each receipt as a new message so photos are visible
     for r in rows:
-        exam_type = r.get("exam_type", "")
-        stream    = r.get("stream", "")
-        dept      = r.get("dept", "")
+        exam_type = r.get("exam_type") or ""
+        stream    = r.get("stream")    or ""
+        dept      = r.get("dept")      or ""
         label     = exam_type.title()
         if stream: label += " / " + stream.title()
         if dept:   label += " / " + dept.replace("_", " ").title()
+
+        full_name = r.get("full_name") or ""
+        username  = ("@" + r["username"]) if r.get("username") else ""
+        user_line = (full_name + " " + username).strip() or str(r["telegram_id"])
+
         caption = (
-            f"🧾 *Payment Receipt*\n\n"
-            f"User: `{r['telegram_id']}`\n"
-            f"Plan: {label}\n"
-            f"Submitted: {str(r.get('submitted_at',''))[:16]}"
+            f"🧾 *Payment Receipt #{r['id']}*\n\n"
+            f"👤 {user_line}\n"
+            f"🆔 `{r['telegram_id']}`\n"
+            f"📚 Plan: *{label}*\n"
+            f"🕐 Submitted: {str(r.get('submitted_at',''))[:16]}"
         )
         kb = receipt_action_keyboard(r["id"], r["telegram_id"], exam_type, stream, dept)
         try:
@@ -1472,13 +1549,14 @@ async def show_pending_receipts(query, context):
             else:
                 await context.bot.send_message(
                     chat_id=query.from_user.id,
-                    text=caption,
+                    text=caption + "\n\n⚠️ No photo attached.",
                     parse_mode="Markdown",
                     reply_markup=kb)
         except Exception as e:
-            logger.error(f"show_pending_receipts: {e}")
+            logger.error(f"show_pending_receipts row {r['id']}: {e}")
+
     await query.edit_message_text(
-        f"🧾 *{len(rows)} pending receipt(s)* sent above. ☝️",
+        f"🧾 *{len(rows)} pending receipt(s)* shown above ☝️",
         parse_mode="Markdown",
         reply_markup=admin_back_keyboard())
 
@@ -1507,16 +1585,18 @@ async def approve_receipt(query, context, data):
             await query.edit_message_text(f"ℹ️ Already {row[0]}.")
             return
 
-        # Determine subscription period (default 30 days)
-        days = 30
-        expiry = f"datetime('now','+{days} days')"
-
+        # Grant 30-day subscription — also insert into multi-subscriptions table
         await db.execute(
-            f"UPDATE users SET is_subscribed=1, "
-            f"subscription_expiry={expiry}, "
-            f"subscribed_exam_type=?, subscribed_stream=?, subscribed_dept=? "
-            f"WHERE telegram_id=?",
+            "UPDATE users SET is_subscribed=1, "
+            "subscription_expiry=datetime('now','+30 days'), "
+            "subscribed_exam_type=?, subscribed_stream=?, subscribed_dept=? "
+            "WHERE telegram_id=?",
             (exam_type, stream, dept, telegram_id))
+        await db.execute(
+            "INSERT INTO subscriptions "
+            "(telegram_id, exam_type, stream, dept, expiry_at, is_active) "
+            "VALUES (?, ?, ?, ?, datetime('now','+30 days'), 1)",
+            (telegram_id, exam_type, stream or None, dept or None))
         await db.execute(
             "UPDATE payment_receipts SET status='approved', reviewed_at=datetime('now') WHERE id=?",
             (payment_id,))
