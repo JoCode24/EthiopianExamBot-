@@ -1,272 +1,326 @@
 """
 app/handlers/subscription.py
-Handles subscription selection, bank payment instructions,
-and receipt photo submission.
+
+Handles the full subscription flow:
+  /subscribe → pick exam type → stream/dept (if needed) → bank info →
+  "I've Paid" → send receipt photo → admin notified with approve/reject buttons.
 """
+
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from telegram.constants import ParseMode
-
+from app.keyboards.admin_menu import receipt_action_keyboard
+from config import DATABASE_PATH, ADMIN_ID
 import aiosqlite
-from config import DATABASE_PATH, SUBSCRIPTION_PRICE_ETB, SUBSCRIPTION_DAYS
-from app.utils.logger import logger
 
+logger = logging.getLogger(__name__)
 
-async def _get_banks():
+EXAM_TYPES = ["entrance", "exit", "coc", "driving", "remedial", "mock"]
+
+STREAMS = ["Natural", "Social"]
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+async def check_subscription(
+    telegram_id: int,
+    exam_type: str,
+    stream: str | None = None,
+    dept: str | None = None,
+) -> bool:
+    """Return True if the user has an active subscription for the given exam."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT * FROM bank_accounts WHERE is_active=1")
-        return [dict(r) for r in await cur.fetchall()]
+        row = await db.execute_fetchone(
+            """
+            SELECT id FROM subscriptions
+            WHERE telegram_id = ?
+              AND exam_type    = ?
+              AND (stream = ? OR stream IS NULL OR ? IS NULL)
+              AND (dept   = ? OR dept   IS NULL OR ? IS NULL)
+              AND is_active = 1
+              AND expiry_at  > datetime('now')
+            """,
+            (telegram_id, exam_type, stream, stream, dept, dept),
+        )
+        return row is not None
 
 
-async def subscribe_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Entry point: show exam type selection. Callback: subscribe"""
-    query = update.callback_query
-    await query.answer()
+async def _get_bank_accounts(db: aiosqlite.Connection) -> list[dict]:
+    db.row_factory = aiosqlite.Row
+    cursor = await db.execute(
+        "SELECT bank_name, account_number, account_holder FROM bank_accounts WHERE is_active=1"
+    )
+    rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
 
+
+def _exam_type_keyboard() -> InlineKeyboardMarkup:
     buttons = [
-        [InlineKeyboardButton("🎓 Entrance Exam", callback_data="sub_exam_entrance")],
-        [InlineKeyboardButton("📋 Exit Exam",     callback_data="sub_exam_exit")],
-        [InlineKeyboardButton("📚 Remedial Exam", callback_data="sub_exam_remedial")],
-        [InlineKeyboardButton("🚗 Driving License", callback_data="sub_exam_driving")],
-        [InlineKeyboardButton("🏅 COC Exam",      callback_data="sub_exam_coc")],
-        [InlineKeyboardButton("⬅️ Back",          callback_data="main_menu")],
+        [InlineKeyboardButton(et.capitalize(), callback_data=f"sub_exam_{et}")]
+        for et in EXAM_TYPES
     ]
-    await query.edit_message_text(
-        f"💎 *Subscribe — {SUBSCRIPTION_PRICE_ETB} ETB / {SUBSCRIPTION_DAYS} days*\n\n"
-        "Choose the exam you're preparing for:",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(buttons),
+    return InlineKeyboardMarkup(buttons)
+
+
+def _stream_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(s, callback_data=f"sub_stream_{s.lower()}")]
+        for s in STREAMS
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def _dept_keyboard(stream: str) -> InlineKeyboardMarkup:
+    natural_depts = ["Biology", "Chemistry", "Physics", "Math", "Agriculture"]
+    social_depts  = ["History", "Geography", "Economics", "Civic", "Business"]
+    depts = natural_depts if stream == "natural" else social_depts
+    buttons = [
+        [InlineKeyboardButton(d, callback_data=f"sub_dept_{d.lower()}")]
+        for d in depts
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+# ---------------------------------------------------------------------------
+# /subscribe
+# ---------------------------------------------------------------------------
+
+async def subscribe_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Entry point: /subscribe command or 'subscribe' callback."""
+    # Support both command and callback
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        send = query.edit_message_text
+    else:
+        send = update.message.reply_text
+
+    await send(
+        "📚 *Choose an exam type to subscribe to:*",
+        parse_mode="Markdown",
+        reply_markup=_exam_type_keyboard(),
     )
 
 
-async def sub_exam_select_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback: sub_exam_<exam_type>"""
+# ---------------------------------------------------------------------------
+# Step 1 — exam type selected
+# ---------------------------------------------------------------------------
+
+async def sub_exam_select_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
 
     exam_type = query.data.replace("sub_exam_", "")
     context.user_data["sub_exam_type"] = exam_type
+    context.user_data["sub_stream"] = None
+    context.user_data["sub_dept"] = None
 
-    if exam_type in ("entrance", "remedial"):
-        buttons = [
-            [InlineKeyboardButton("🔬 Natural Science", callback_data="sub_stream_natural")],
-            [InlineKeyboardButton("📚 Social Science",  callback_data="sub_stream_social")],
-            [InlineKeyboardButton("⬅️ Back",            callback_data="subscribe")],
-        ]
+    if exam_type in ("entrance", "exit"):
         await query.edit_message_text(
-            f"📚 *{exam_type.title()} Exam*\n\nChoose your stream:",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup(buttons),
+            f"📖 You chose *{exam_type.capitalize()}* exam.\n\nSelect your stream:",
+            parse_mode="Markdown",
+            reply_markup=_stream_keyboard(),
         )
-
-    elif exam_type in ("exit", "coc"):
-        async with aiosqlite.connect(DATABASE_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM departments WHERE exam_type=?", (exam_type,))
-            depts = [dict(r) for r in await cur.fetchall()]
-
-        buttons = [
-            [InlineKeyboardButton(
-                f"{d['emoji']} {d['dept_name']}",
-                callback_data=f"sub_dept_{d['dept_key']}"
-            )]
-            for d in depts
-        ]
-        buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="subscribe")])
-
-        label = "Department" if exam_type == "exit" else "Field"
-        await query.edit_message_text(
-            f"📋 *{exam_type.title()} Exam*\n\nChoose your {label}:",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
-
     else:
-        # driving / other — no stream needed
-        context.user_data["sub_stream"] = "general"
-        context.user_data["sub_dept"] = "general"
-        await _show_banks(query, context)
+        # Skip stream/dept, go straight to bank info
+        await _show_bank_info(query, context, exam_type, None, None)
 
 
-async def sub_stream_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback: sub_stream_<stream>"""
+# ---------------------------------------------------------------------------
+# Step 2a — stream selected (entrance/exit only)
+# ---------------------------------------------------------------------------
+
+async def sub_stream_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
 
     stream = query.data.replace("sub_stream_", "")
     context.user_data["sub_stream"] = stream
-    context.user_data["sub_dept"] = ""
-    await _show_banks(query, context)
+
+    exam_type = context.user_data.get("sub_exam_type", "entrance")
+    await query.edit_message_text(
+        f"🏫 Stream: *{stream.capitalize()}*\n\nNow select your department:",
+        parse_mode="Markdown",
+        reply_markup=_dept_keyboard(stream),
+    )
 
 
-async def sub_dept_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback: sub_dept_<dept_key>"""
+# ---------------------------------------------------------------------------
+# Step 2b — dept selected
+# ---------------------------------------------------------------------------
+
+async def sub_dept_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
 
     dept = query.data.replace("sub_dept_", "")
     context.user_data["sub_dept"] = dept
-    context.user_data["sub_stream"] = dept  # store in both for compatibility
-    await _show_banks(query, context)
+
+    exam_type = context.user_data.get("sub_exam_type")
+    stream    = context.user_data.get("sub_stream")
+    await _show_bank_info(query, context, exam_type, stream, dept)
 
 
-async def _show_banks(query, context: ContextTypes.DEFAULT_TYPE):
-    banks = await _get_banks()
+# ---------------------------------------------------------------------------
+# Step 3 — show bank accounts + "I've Paid" button
+# ---------------------------------------------------------------------------
 
-    exam_type = context.user_data.get("sub_exam_type", "")
-    stream = context.user_data.get("sub_stream", "")
-    dept = context.user_data.get("sub_dept", "")
+async def _show_bank_info(query, context, exam_type, stream, dept):
+    telegram_id = query.from_user.id
 
-    if not banks:
+    # Check existing active subscription
+    if await check_subscription(telegram_id, exam_type, stream, dept):
+        label = exam_type.capitalize()
+        if stream:
+            label += f" / {stream.capitalize()}"
+        if dept:
+            label += f" / {dept.capitalize()}"
         await query.edit_message_text(
-            "⚠️ No payment banks configured yet. Contact admin.",
+            f"ℹ️ You already have an active subscription for *{label}*.\n\n"
+            "You can renew it by paying again. Continue to see payment details.",
+            parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Back", callback_data="subscribe")]
-            ])
+                [InlineKeyboardButton("Continue to payment", callback_data=f"pay_{exam_type}")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_sub")],
+            ]),
         )
         return
 
-    buttons = [
-        [InlineKeyboardButton(
-            f"🏦 Pay via {b['bank_name']}",
-            callback_data=f"pay_{b['bank_name']}"
-        )]
-        for b in banks
-    ]
-    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="subscribe")])
-
-    await query.edit_message_text(
-        f"💳 *Payment — {SUBSCRIPTION_PRICE_ETB} ETB*\n\n"
-        f"📚 Exam: *{exam_type.title()}*\n"
-        f"🔀 Stream/Dept: *{stream or dept or 'General'}*\n\n"
-        "Choose your bank to see payment details:",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
-
-
-async def pay_bank_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback: pay_<BankName>"""
-    query = update.callback_query
-    await query.answer()
-
-    bank_name = query.data.replace("pay_", "")
-    context.user_data["pay_bank"] = bank_name
-
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        cur = await db.execute(
-            "SELECT account_number, account_name FROM bank_accounts WHERE bank_name=? AND is_active=1",
-            (bank_name,)
-        )
-        row = await cur.fetchone()
+        accounts = await _get_bank_accounts(db)
 
-    if not row:
+    if not accounts:
         await query.edit_message_text(
-            "⚠️ Bank not found. Please choose another.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Back", callback_data="subscribe")]
-            ])
+            "⚠️ No bank accounts configured. Please contact admin.",
         )
         return
 
-    acct_no, acct_name = row
-    exam_type = context.user_data.get("sub_exam_type", "")
-    stream = context.user_data.get("sub_stream", "")
-    dept = context.user_data.get("sub_dept", "")
+    lines = ["💳 *Bank Payment Details*\n"]
+    for acc in accounts:
+        lines.append(
+            f"🏦 *{acc['bank_name']}*\n"
+            f"Account: `{acc['account_number']}`\n"
+            f"Holder: {acc['account_holder']}\n"
+        )
+    lines.append("\nAfter transferring, tap the button below.")
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ I've Paid", callback_data=f"pay_{exam_type}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_sub")],
+    ])
 
     await query.edit_message_text(
-        f"🏦 *{bank_name} Payment Instructions*\n\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"💰 Amount: *{SUBSCRIPTION_PRICE_ETB} ETB*\n"
-        f"🏦 Bank: *{bank_name}*\n"
-        f"📋 Account No: `{acct_no}`\n"
-        f"👤 Account Name: *{acct_name}*\n"
-        f"━━━━━━━━━━━━━━━━━━\n\n"
-        f"📚 Exam: *{exam_type.title()}*\n"
-        f"🔀 Stream/Dept: *{stream or dept or 'General'}*\n\n"
-        "✅ After payment, tap below to send your receipt photo.",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📸 Send Receipt Photo", callback_data="send_receipt")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="subscribe")],
-        ])
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=keyboard,
     )
 
 
-async def send_receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Prompt user to send receipt. Callback: send_receipt"""
+# ---------------------------------------------------------------------------
+# Step 4 — "I've Paid" tapped → ask for receipt photo
+# ---------------------------------------------------------------------------
+
+async def pay_bank_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
 
+    # Store exam_type from button data as well (handles renew path)
+    exam_type = query.data.replace("pay_", "")
+    context.user_data["sub_exam_type"] = exam_type
+    context.user_data["waiting_for"] = "receipt_photo"
+
     await query.edit_message_text(
-        "📸 *Send Your Receipt*\n\n"
-        "Please send a *photo* of your bank transfer receipt now.\n\n"
-        "🕐 Admin will review and approve within 24 hours.",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ Cancel", callback_data="main_menu")]
-        ])
+        "📸 Please send a *photo* of your payment receipt.\n"
+        "Make sure the transaction details are clearly visible.",
+        parse_mode="Markdown",
     )
-    context.user_data["awaiting_receipt"] = True
 
 
-async def receipt_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles photo submitted as receipt."""
-    if not context.user_data.get("awaiting_receipt"):
-        return  # Not awaiting receipt
+# ---------------------------------------------------------------------------
+# Step 4 alt — "send_receipt" callback (from menu)
+# ---------------------------------------------------------------------------
 
-    context.user_data["awaiting_receipt"] = False
+async def send_receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    context.user_data["waiting_for"] = "receipt_photo"
 
-    tid = update.effective_user.id
-    full_name = update.effective_user.full_name or ""
+    await query.edit_message_text(
+        "📸 Please send a *photo* of your payment receipt.",
+        parse_mode="Markdown",
+    )
 
-    exam_type = context.user_data.get("sub_exam_type", "")
-    stream = context.user_data.get("sub_stream", "")
-    dept = context.user_data.get("sub_dept", "")
-    bank = context.user_data.get("pay_bank", "")
 
-    photo = update.message.photo[-1]  # Largest size
-    file_id = photo.file_id
+# ---------------------------------------------------------------------------
+# Step 5 — receipt photo received
+# ---------------------------------------------------------------------------
 
-    # Save to payments table
+async def receipt_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.user_data.get("waiting_for") != "receipt_photo":
+        return  # Not waiting for a receipt right now
+
+    if not update.message.photo:
+        await update.message.reply_text("⚠️ Please send a *photo*, not a file or document.")
+        return
+
+    # Always use the highest-resolution photo (last item in the list)
+    file_id    = update.message.photo[-1].file_id
+    telegram_id = update.effective_user.id
+
+    exam_type = context.user_data.get("sub_exam_type", "unknown")
+    stream    = context.user_data.get("sub_stream")
+    dept      = context.user_data.get("sub_dept")
+
+    # Save receipt to DB
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute(
-            """INSERT INTO payments
-               (telegram_id, full_name, amount, bank, receipt_file_id, status, exam_type, stream, dept)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (tid, full_name, SUBSCRIPTION_PRICE_ETB, bank, file_id, "pending", exam_type, stream, dept)
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            INSERT INTO payment_receipts
+                (telegram_id, file_id, exam_type, stream, dept, status, submitted_at)
+            VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))
+            """,
+            (telegram_id, file_id, exam_type, stream, dept),
         )
+        payment_id = cursor.lastrowid
         await db.commit()
 
+    # Confirm to user
+    context.user_data["waiting_for"] = None
     await update.message.reply_text(
-        "✅ *Receipt Received!*\n\n"
-        f"📚 Exam: *{exam_type.title()}*\n"
-        f"🔀 Stream/Dept: *{stream or dept or 'General'}*\n"
-        f"🏦 Bank: *{bank}*\n\n"
-        "🕐 Admin will review your payment within 24 hours.\n"
-        "You'll receive a notification once approved! 🎉",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]
-        ])
+        "✅ Receipt received! Your subscription request is *pending admin review*.\n"
+        "You will be notified once approved.",
+        parse_mode="Markdown",
     )
 
     # Notify admin
+    user = update.effective_user
+    username_part = f"@{user.username}" if user.username else "(no username)"
+    full_name     = user.full_name or "(no name)"
+
+    exam_label = exam_type.capitalize()
+    if stream:
+        exam_label += f" / {stream.capitalize()}"
+    if dept:
+        exam_label += f" / {dept.capitalize()}"
+
+    caption = (
+        f"📥 *New Payment Receipt*\n\n"
+        f"👤 {full_name} {username_part}\n"
+        f"🆔 `{telegram_id}`\n"
+        f"📚 Exam: *{exam_label}*\n"
+        f"🧾 Receipt ID: `{payment_id}`"
+    )
+
     try:
-        from config import ADMIN_ID as ADMIN_TID
         await context.bot.send_photo(
-            chat_id=ADMIN_TID,
+            chat_id=ADMIN_ID,
             photo=file_id,
-            caption=(
-                f"🔔 *New Payment Receipt*\n\n"
-                f"👤 User: {full_name} (`{tid}`)\n"
-                f"📚 Exam: {exam_type.title()}\n"
-                f"🔀 Stream: {stream or dept or 'General'}\n"
-                f"🏦 Bank: {bank}\n"
-                f"💰 Amount: {SUBSCRIPTION_PRICE_ETB} ETB"
-            ),
-            parse_mode=ParseMode.MARKDOWN,
+            caption=caption,
+            parse_mode="Markdown",
+            reply_markup=receipt_action_keyboard(payment_id, telegram_id, exam_type, stream, dept),
         )
     except Exception as e:
-        logger.warning(f"Could not notify admin: {e}")
+        logger.error("Failed to notify admin about receipt %s: %s", payment_id, e)
