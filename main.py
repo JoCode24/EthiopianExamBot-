@@ -44,6 +44,7 @@ from app.handlers.subscription import (
     pay_bank_handler,
     send_receipt_handler,
     receipt_photo_handler,
+    cancel_sub_handler,
 )
 from app.handlers.user_features import (
     redeem_command,
@@ -108,6 +109,7 @@ def main():
 
     # ── Subscription flow ─────────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(subscribe_handler,       pattern=r"^subscribe$"))
+    app.add_handler(CallbackQueryHandler(cancel_sub_handler,      pattern=r"^cancel_sub$"))
     app.add_handler(CallbackQueryHandler(sub_exam_select_handler, pattern=r"^sub_exam_"))
     app.add_handler(CallbackQueryHandler(sub_stream_select,       pattern=r"^sub_stream_"))
     app.add_handler(CallbackQueryHandler(sub_dept_select,         pattern=r"^sub_dept_"))
