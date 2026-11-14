@@ -17,6 +17,7 @@ def admin_main_keyboard(role="super"):
         [InlineKeyboardButton("🎁 Giveaway Free Access", callback_data="admin_giveaway")],
         [InlineKeyboardButton("📢 Broadcast Message", callback_data="admin_broadcast")],
         [InlineKeyboardButton("🧾 Pending Receipts", callback_data="admin_pending_receipts")],
+        [InlineKeyboardButton("💾 Backup & Restore", callback_data="admin_backup_menu")],
     ]
     if role == "super":
         rows.append([InlineKeyboardButton("👮 Manage Admins", callback_data="admin_manage_admins")])
@@ -152,4 +153,26 @@ def bulk_delete_exam_type_keyboard():
         [InlineKeyboardButton("📝 Remedial", callback_data="bd_type_remedial"),
          InlineKeyboardButton("📋 Mock", callback_data="bd_type_mock")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_bulk_delete")],
+    ])
+
+
+# ── Backup Keyboards ──────────────────────────────────────────────────────────
+
+def backup_main_keyboard():
+    """Backup & Restore main menu."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📦 Full Backup (all data)", callback_data="bkp_full")],
+        [InlineKeyboardButton("📚 Questions Only Backup", callback_data="bkp_questions")],
+        [InlineKeyboardButton("👥 Users Only Backup", callback_data="bkp_users")],
+        [InlineKeyboardButton("📥 Restore from File", callback_data="bkp_restore_menu")],
+        [InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_back")],
+    ])
+
+
+def backup_restore_keyboard():
+    """Choose restore mode."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔀 Merge (keep existing, add new)", callback_data="bkp_do_restore_merge")],
+        [InlineKeyboardButton("♻️ Replace (clear & reload questions)", callback_data="bkp_do_restore_replace")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="admin_backup_menu")],
     ])
