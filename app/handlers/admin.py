@@ -1,3 +1,9 @@
+"""
+app/handlers/admin.py
+─────────────────────
+Admin panel: questions, subjects, departments, users, subscriptions,
+bulk-delete, referral stats, backup/restore.
+"""
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from app.keyboards.admin_menu import (
@@ -7,6 +13,7 @@ from app.keyboards.admin_menu import (
     manage_subjects_keyboard, manage_depts_keyboard,
     manage_admins_keyboard, giveaway_keyboard, receipt_action_keyboard,
     bulk_delete_main_keyboard, bulk_delete_exam_type_keyboard,
+    backup_main_keyboard, backup_restore_keyboard,
 )
 from app.utils.access import is_any_admin, get_admin_role
 from app.utils.logger import logger
@@ -40,6 +47,8 @@ async def get_depts(exam_type="exit"):
         return [dict(r) for r in await cur.fetchall()]
 
 
+# ─────────────────────── /admin command ──────────────────────────────────────
+
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not await is_any_admin(uid):
@@ -52,17 +61,20 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=admin_main_keyboard(role or "super"))
 
 
+# ─────────────────────── Callback router ─────────────────────────────────────
+
 async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-    uid = query.from_user.id
+    uid  = query.from_user.id
     if not await is_any_admin(uid):
         await query.edit_message_text("⛔ Unauthorized.")
         return
-    role = await get_admin_role(uid)
+    role     = await get_admin_role(uid)
     is_super = (role == "super")
 
+    # ── Navigation ────────────────────────────────────────────────────────────
     if data == "admin_back":
         await query.edit_message_text(
             "🛡️ *Admin Panel*",
@@ -70,6 +82,8 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=admin_main_keyboard(role or "super"))
     elif data == "admin_close":
         await query.edit_message_text("✅ Panel closed.")
+
+    # ── Basic views ───────────────────────────────────────────────────────────
     elif data == "admin_view_users":
         await show_users(query)
     elif data == "admin_stats":
@@ -83,33 +97,27 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         exam_type = data.replace("vq_type_", "")
         await show_questions_by_type(query, exam_type)
     elif data.startswith("vq_stream_"):
-        # vq_stream_<exam_type>_<stream>
         parts = data.replace("vq_stream_", "").split("_", 1)
         if len(parts) == 2:
             await show_questions_list(query, parts[0], parts[1])
     elif data.startswith("vq_dept_"):
-        # vq_dept_<exam_type>_<dept_key>
-        rest = data.replace("vq_dept_", "")
-        # exam_type is first segment, dept_key may have underscores
+        rest      = data.replace("vq_dept_", "")
         first_sep = rest.index("_")
-        et = rest[:first_sep]
-        dk = rest[first_sep + 1:]
+        et        = rest[:first_sep]
+        dk        = rest[first_sep + 1:]
         await show_questions_list(query, et, dk)
     elif data.startswith("vq_page_"):
-        # vq_page_<exam_type>_<stream>_<offset>
-        rest = data.replace("vq_page_", "")
+        rest  = data.replace("vq_page_", "")
         parts = rest.rsplit("_", 1)
         if len(parts) == 2:
-            try:
-                offset = int(parts[1])
-            except ValueError:
-                offset = 0
-            # parts[0] is exam_type_stream
+            try:   offset = int(parts[1])
+            except ValueError: offset = 0
             inner = parts[0]
-            sep = inner.index("_")
-            et = inner[:sep]
-            st = inner[sep + 1:]
+            sep   = inner.index("_")
+            et, st = inner[:sep], inner[sep + 1:]
             await show_questions_list(query, et, st, offset)
+
+    # ── Manage Subjects / Depts / Admins ──────────────────────────────────────
     elif data == "admin_manage_subjects":
         await query.edit_message_text("📚 Manage Subjects", reply_markup=manage_subjects_keyboard())
     elif data == "admin_manage_depts":
@@ -127,7 +135,7 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         context.user_data["waiting_for"] = "add_subadmin"
         await query.edit_message_text(
-            "➕ *Add Sub Admin*\n\nSend the Telegram ID of the person.\nThey must have started the bot first.\n\nType /cancel to abort.",
+            "➕ *Add Sub Admin*\n\nSend the Telegram ID.\nThey must have started the bot.\n\nType /cancel to abort.",
             parse_mode="Markdown")
     elif data == "admin_remove_admin":
         if not is_super:
@@ -142,9 +150,7 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text(
             "➕ *Add Subject*\n\n"
             "Format: `exam_type|stream|key|name|emoji`\n\n"
-            "Examples:\n"
-            "`entrance|natural|physics|Physics|⚡`\n"
-            "`driving|general|parking|Parking Rules|🚗`\n\n"
+            "Example: `entrance|natural|physics|Physics|⚡`\n\n"
             "Type /cancel to abort.", parse_mode="Markdown")
     elif data == "admin_edit_subject":
         context.user_data["waiting_for"] = "edit_subject_info"
@@ -154,7 +160,7 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     elif data == "admin_delete_subject":
         context.user_data["waiting_for"] = "delete_subject_key"
         await query.edit_message_text(
-            "🗑️ *Delete Subject*\n\nSend the subject key to delete.\nUse View Questions to find keys.\n\nType /cancel to abort.",
+            "🗑️ *Delete Subject*\n\nSend the subject key.\n\nType /cancel to abort.",
             parse_mode="Markdown")
     elif data == "admin_list_subjects":
         await list_subjects(query)
@@ -163,9 +169,7 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text(
             "➕ *Add Department*\n\n"
             "Format: `exam_type|key|name|emoji`\n\n"
-            "Examples:\n"
-            "`exit|nursing|Nursing|🩺`\n"
-            "`coc|coc_welding|Welding|🔧`\n\n"
+            "Example: `exit|nursing|Nursing|🩺`\n\n"
             "Type /cancel to abort.", parse_mode="Markdown")
     elif data == "admin_edit_dept":
         context.user_data["waiting_for"] = "edit_dept_info"
@@ -179,6 +183,8 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             parse_mode="Markdown")
     elif data == "admin_list_depts":
         await list_depts(query)
+
+    # ── Question management ───────────────────────────────────────────────────
     elif data == "admin_add_question":
         context.user_data.clear()
         await query.edit_message_text(
@@ -196,17 +202,14 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             "🗑️ *Delete Question*\n\nSend the question ID number.\n\nType /cancel to abort.",
             parse_mode="Markdown")
 
-    # ── Bulk Delete ────────────────────────────────────────────────────────
+    # ── Bulk Delete ───────────────────────────────────────────────────────────
     elif data == "admin_bulk_delete":
         await show_bulk_delete_menu(query)
-
     elif data == "bd_by_type":
         await query.edit_message_text(
-            "🗑️🗑️ *Bulk Delete — By Exam Type*\n\n"
-            "Choose which exam type to delete ALL questions for:",
+            "🗑️🗑️ *Bulk Delete — By Exam Type*\n\nChoose which exam type to delete ALL questions for:",
             parse_mode="Markdown",
             reply_markup=bulk_delete_exam_type_keyboard())
-
     elif data.startswith("bd_type_"):
         exam_type = data.replace("bd_type_", "")
         context.user_data["bd_exam_type"] = exam_type
@@ -215,17 +218,13 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 "SELECT COUNT(*) FROM questions WHERE exam_type=?", (exam_type,))).fetchone())[0]
         await query.edit_message_text(
             f"⚠️ *Confirm Bulk Delete*\n\n"
-            f"You are about to delete ALL *{count} questions* for exam type: *{exam_type.title()}*\n\n"
-            "This cannot be undone!\n\n"
-            "Type `YES DELETE` to confirm, or /cancel to abort.",
+            f"Delete ALL *{count} questions* for exam type: *{exam_type.title()}*\n\n"
+            "This cannot be undone!\n\nType `YES DELETE` to confirm, or /cancel to abort.",
             parse_mode="Markdown")
         context.user_data["waiting_for"] = "bd_confirm_type"
-
     elif data == "bd_by_subject":
         async with aiosqlite.connect(DATABASE_PATH) as db:
-            cur = await db.execute(
-                "SELECT subject, COUNT(*) as cnt FROM questions "
-                "GROUP BY subject ORDER BY subject")
+            cur  = await db.execute("SELECT subject, COUNT(*) FROM questions GROUP BY subject ORDER BY subject")
             rows = await cur.fetchall()
         if not rows:
             await query.edit_message_text("No questions found.", reply_markup=bulk_delete_main_keyboard())
@@ -233,15 +232,12 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         buttons = []
         for subj, cnt in rows:
             label = (subj or "unknown").replace("_", " ").title()
-            buttons.append([InlineKeyboardButton(
-                f"📚 {label} ({cnt})", callback_data=f"bd_subj_{subj}")])
+            buttons.append([InlineKeyboardButton(f"📚 {label} ({cnt})", callback_data=f"bd_subj_{subj}")])
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_bulk_delete")])
         await query.edit_message_text(
-            "🗑️🗑️ *Bulk Delete — Choose Subject*\n\n"
-            "Select a subject to delete ALL its questions:",
+            "🗑️🗑️ *Bulk Delete — Choose Subject*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(buttons))
-
     elif data.startswith("bd_subj_"):
         subj = data.replace("bd_subj_", "")
         context.user_data["bd_subject"] = subj
@@ -249,37 +245,30 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             count = (await (await db.execute(
                 "SELECT COUNT(*) FROM questions WHERE subject=?", (subj,))).fetchone())[0]
         await query.edit_message_text(
-            f"⚠️ *Confirm Bulk Delete*\n\n"
-            f"Delete ALL *{count} questions* for subject: *{subj.replace('_',' ').title()}*\n\n"
-            "This cannot be undone!\n\n"
+            f"⚠️ Delete ALL *{count} questions* for subject: *{subj.replace('_',' ').title()}*\n\n"
             "Type `YES DELETE` to confirm, or /cancel to abort.",
             parse_mode="Markdown")
         context.user_data["waiting_for"] = "bd_confirm_subject"
-
     elif data == "bd_by_year":
         async with aiosqlite.connect(DATABASE_PATH) as db:
-            cur = await db.execute(
-                "SELECT year, COUNT(*) FROM questions WHERE year IS NOT NULL "
-                "GROUP BY year ORDER BY year DESC")
+            cur  = await db.execute(
+                "SELECT year, COUNT(*) FROM questions WHERE year IS NOT NULL GROUP BY year ORDER BY year DESC")
             rows = await cur.fetchall()
         if not rows:
-            await query.edit_message_text(
-                "No questions with year found.", reply_markup=bulk_delete_main_keyboard())
+            await query.edit_message_text("No questions with year found.", reply_markup=bulk_delete_main_keyboard())
             return
         buttons = []
         row = []
         for yr, cnt in rows:
-            row.append(InlineKeyboardButton(
-                f"📅 {yr} ({cnt})", callback_data=f"bd_year_{yr}"))
+            row.append(InlineKeyboardButton(f"📅 {yr} ({cnt})", callback_data=f"bd_year_{yr}"))
             if len(row) == 3:
                 buttons.append(row); row = []
         if row: buttons.append(row)
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_bulk_delete")])
         await query.edit_message_text(
-            "🗑️🗑️ *Bulk Delete — Choose Year*\n\nSelect a year to delete ALL its questions:",
+            "🗑️🗑️ *Bulk Delete — Choose Year*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(buttons))
-
     elif data.startswith("bd_year_"):
         year = data.replace("bd_year_", "")
         context.user_data["bd_year"] = year
@@ -287,52 +276,42 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             count = (await (await db.execute(
                 "SELECT COUNT(*) FROM questions WHERE year=?", (year,))).fetchone())[0]
         await query.edit_message_text(
-            f"⚠️ *Confirm Bulk Delete*\n\n"
-            f"Delete ALL *{count} questions* for year: *{year}*\n\n"
-            "This cannot be undone!\n\n"
+            f"⚠️ Delete ALL *{count} questions* for year: *{year}*\n\n"
             "Type `YES DELETE` to confirm, or /cancel to abort.",
             parse_mode="Markdown")
         context.user_data["waiting_for"] = "bd_confirm_year"
-
     elif data == "bd_by_subject_year":
         async with aiosqlite.connect(DATABASE_PATH) as db:
-            cur = await db.execute(
-                "SELECT subject, COUNT(*) as cnt FROM questions "
-                "GROUP BY subject ORDER BY subject")
+            cur  = await db.execute("SELECT subject, COUNT(*) FROM questions GROUP BY subject ORDER BY subject")
             rows = await cur.fetchall()
         if not rows:
             await query.edit_message_text("No questions found.", reply_markup=bulk_delete_main_keyboard())
             return
-        buttons = []
-        for subj, cnt in rows:
-            label = (subj or "unknown").replace("_", " ").title()
-            buttons.append([InlineKeyboardButton(
-                f"📚 {label} ({cnt})", callback_data=f"bd_sy_subj_{subj}")])
+        buttons = [[InlineKeyboardButton(
+            f"📚 {(s or 'unknown').replace('_',' ').title()} ({c})", callback_data=f"bd_sy_subj_{s}"
+        )] for s, c in rows]
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_bulk_delete")])
         await query.edit_message_text(
-            "🗑️🗑️ *Bulk Delete — Subject + Year*\n\nFirst choose a subject:",
+            "🗑️🗑️ *Subject + Year* — choose subject:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(buttons))
-
     elif data.startswith("bd_sy_subj_"):
         subj = data.replace("bd_sy_subj_", "")
         context.user_data["bd_sy_subject"] = subj
         async with aiosqlite.connect(DATABASE_PATH) as db:
-            cur = await db.execute(
+            cur  = await db.execute(
                 "SELECT year, COUNT(*) FROM questions WHERE subject=? AND year IS NOT NULL "
                 "GROUP BY year ORDER BY year DESC", (subj,))
             rows = await cur.fetchall()
         if not rows:
             await query.edit_message_text(
                 f"No years found for *{subj.replace('_',' ').title()}*.",
-                parse_mode="Markdown",
-                reply_markup=bulk_delete_main_keyboard())
+                parse_mode="Markdown", reply_markup=bulk_delete_main_keyboard())
             return
         buttons = []
         row = []
         for yr, cnt in rows:
-            row.append(InlineKeyboardButton(
-                f"📅 {yr} ({cnt})", callback_data=f"bd_sy_year_{yr}"))
+            row.append(InlineKeyboardButton(f"📅 {yr} ({cnt})", callback_data=f"bd_sy_year_{yr}"))
             if len(row) == 3:
                 buttons.append(row); row = []
         if row: buttons.append(row)
@@ -341,43 +320,55 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             f"📚 *{subj.replace('_',' ').title()}* — choose year:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(buttons))
-
     elif data.startswith("bd_sy_year_"):
-        yr = data.replace("bd_sy_year_", "")
+        yr   = data.replace("bd_sy_year_", "")
         subj = context.user_data.get("bd_sy_subject", "")
-        context.user_data["bd_year"] = yr
+        context.user_data["bd_year"]    = yr
         context.user_data["bd_subject"] = subj
         async with aiosqlite.connect(DATABASE_PATH) as db:
             count = (await (await db.execute(
                 "SELECT COUNT(*) FROM questions WHERE subject=? AND year=?",
                 (subj, yr))).fetchone())[0]
         await query.edit_message_text(
-            f"⚠️ *Confirm Bulk Delete*\n\n"
-            f"Delete ALL *{count} questions* for:\n"
-            f"📚 Subject: *{subj.replace('_',' ').title()}*\n"
-            f"📅 Year: *{yr}*\n\n"
-            "This cannot be undone!\n\nType `YES DELETE` to confirm, or /cancel to abort.",
+            f"⚠️ Delete ALL *{count} questions* for *{subj.replace('_',' ').title()}* / year *{yr}*\n\n"
+            "Type `YES DELETE` to confirm, or /cancel to abort.",
             parse_mode="Markdown")
         context.user_data["waiting_for"] = "bd_confirm_subject_year"
-
     elif data == "bd_all_confirm":
         async with aiosqlite.connect(DATABASE_PATH) as db:
             count = (await (await db.execute("SELECT COUNT(*) FROM questions")).fetchone())[0]
         await query.edit_message_text(
-            f"☢️ *DANGER: Delete ALL Questions*\n\n"
-            f"This will permanently delete ALL *{count} questions* from the database!\n\n"
-            "Type `YES DELETE ALL` to confirm, or /cancel to abort.",
+            f"☢️ *DANGER: Delete ALL {count} Questions*\n\n"
+            "This is irreversible!\n\nType `YES DELETE ALL` to confirm, or /cancel to abort.",
             parse_mode="Markdown")
         context.user_data["waiting_for"] = "bd_confirm_all"
 
-    # ── Referral Stats ─────────────────────────────────────────────────────
+    # ── Referral Stats ────────────────────────────────────────────────────────
     elif data == "admin_referral_stats":
         await show_referral_stats(query)
-
     elif data.startswith("admin_ref_page_"):
         page = int(data.replace("admin_ref_page_", ""))
         await show_referral_stats(query, page=page)
 
+    # ── Backup & Restore ──────────────────────────────────────────────────────
+    elif data == "admin_backup_menu":
+        from app.handlers.backup import backup_menu_handler
+        await backup_menu_handler(update, context)
+        return
+    elif data in ("bkp_full", "bkp_questions", "bkp_users"):
+        from app.handlers.backup import backup_trigger_handler
+        await backup_trigger_handler(update, context)
+        return
+    elif data == "bkp_restore_menu":
+        from app.handlers.backup import backup_restore_menu_handler
+        await backup_restore_menu_handler(update, context)
+        return
+    elif data in ("bkp_do_restore_merge", "bkp_do_restore_replace"):
+        from app.handlers.backup import backup_do_restore_handler
+        await backup_do_restore_handler(update, context)
+        return
+
+    # ── Upload / upload flow ──────────────────────────────────────────────────
     elif data == "admin_upload_file":
         context.user_data["waiting_for"] = "question_file"
         await query.edit_message_text(
@@ -394,9 +385,10 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             "Reference: Grade 12 Book\n"
             "Year: 2023\n"
             "```\n\n"
-            "Separate each question with a blank line.\n"
-            "Send the `.txt` file now:",
+            "Separate each question with a blank line.\nSend the `.txt` file now:",
             parse_mode="Markdown")
+
+    # ── Subscriptions / giveaway ──────────────────────────────────────────────
     elif data == "admin_grant_sub":
         context.user_data["waiting_for"] = "grant_sub_info"
         await query.edit_message_text(
@@ -416,9 +408,7 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text(
             "🎁 *Create Giveaway Code*\n\n"
             "Format: `days|max_uses`\n\n"
-            "Examples:\n"
-            "`7|100`  = 7 days free, up to 100 students\n"
-            "`30|1`   = 30 days, 1 student only\n\n"
+            "Examples:\n`7|100`  = 7 days, 100 students\n`30|1`  = 30 days, 1 student\n\n"
             "Type /cancel to abort.", parse_mode="Markdown")
     elif data == "admin_list_giveaways":
         await list_giveaways(query)
@@ -442,313 +432,21 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     elif data == "admin_cancel_question":
         context.user_data.clear()
         await query.edit_message_text("❌ Cancelled.", reply_markup=admin_main_keyboard(role or "super"))
+
+    # ── Subject picker (manual question) ──────────────────────────────────────
     elif data.startswith("aq_subject_"):
         subject = data.replace("aq_subject_", "")
-        context.user_data["aq_subject"] = subject
+        context.user_data["aq_subject"]       = subject
         context.user_data["aq_subject_label"] = subject.replace("_", " ").title()
-        context.user_data["waiting_for"] = "aq_question_text"
+        context.user_data["waiting_for"]      = "aq_question_text"
         await query.edit_message_text(
-            "📝 Subject: " + context.user_data["aq_subject_label"] + "\n\nType the question text:\nType /cancel to abort.")
-    elif data.startswith("aq_dept_"):
-        dept = data.replace("aq_dept_", "")
-        context.user_data["aq_stream"] = dept
-        context.user_data["aq_subject"] = dept
-        context.user_data["aq_subject_label"] = dept.replace("_", " ").title()
-        context.user_data["waiting_for"] = "aq_question_text"
-        await query.edit_message_text(
-            "📝 Department: *" + dept.replace("_", " ").title() + "*\n\nType the question text:\nType /cancel to abort.",
-            parse_mode="Markdown")
-    elif data.startswith("edit_q_field_"):
-        field = data.replace("edit_q_field_", "")
-        context.user_data["edit_field"] = field
-        context.user_data["waiting_for"] = "edit_q_value"
-        labels = {
-            "question_text": "question text", "option_a": "Option A",
-            "option_b": "Option B", "option_c": "Option C", "option_d": "Option D",
-            "correct_answer": "correct answer (A/B/C/D)",
-            "explanation": "explanation", "reference": "reference",
-            "year": "year (number or type none)",
-        }
-        await query.edit_message_text("✏️ Send the new " + labels.get(field, field) + ":")
-    elif data.startswith("rcpt_ok_"):
-        await approve_receipt(query, context, data)
-    elif data.startswith("rcpt_no_"):
-        await reject_receipt(query, context, data)
-
-
-async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    uid = query.from_user.id
-    if not await is_any_admin(uid):
-        return
-    has_upload = bool(context.user_data.get("parsed_questions"))
-
-    if data == "aq_type_entrance":
-        context.user_data["aq_exam_type"] = "entrance"
-        if has_upload:
-            context.user_data["upload_exam_type"] = "entrance"
-        await query.edit_message_text("📚 Choose stream:", reply_markup=admin_stream_keyboard())
-
-    elif data == "aq_type_exit":
-        context.user_data["aq_exam_type"] = "exit"
-        if has_upload:
-            context.user_data["upload_exam_type"] = "exit"
-        depts = await get_depts("exit")
-        if not depts:
-            await query.edit_message_text(
-                "⚠️ No Exit Exam departments found.\n\n"
-                "Add departments first:\n"
-                "Admin Panel → Manage Departments → Add Department\n\n"
-                "Format: exam_type|key|name|emoji\n"
-                "Example: exit|nursing|Nursing",
-                reply_markup=admin_back_keyboard())
-            return
-        await query.edit_message_text("🏛️ Choose department:", reply_markup=build_dept_keyboard(depts))
-
-    elif data == "aq_type_coc":
-        context.user_data["aq_exam_type"] = "coc"
-        if has_upload:
-            context.user_data["upload_exam_type"] = "coc"
-        depts = await get_depts("coc")
-        if not depts:
-            await query.edit_message_text(
-                "⚠️ No CoC departments found.\n\n"
-                "Add departments first:\n"
-                "Admin Panel → Manage Departments → Add Department\n\n"
-                "Format: exam_type|key|name|emoji\n"
-                "Example: coc|coc_electrical|Electrical",
-                reply_markup=admin_back_keyboard())
-            return
-        await query.edit_message_text("📋 Choose CoC department:", reply_markup=build_dept_keyboard(depts))
-
-    elif data == "aq_type_driving":
-        context.user_data["aq_exam_type"] = "driving"
-        context.user_data["aq_stream"] = "general"
-        if has_upload:
-            context.user_data["upload_exam_type"] = "driving"
-            context.user_data["upload_stream"] = "general"
-        subjects = await get_subjects("driving", "general")
-        if not subjects:
-            await query.edit_message_text(
-                "⚠️ No Driving subjects found.\n\n"
-                "Add subjects first:\n"
-                "Admin Panel → Manage Subjects → Add Subject\n\n"
-                "Format: exam_type|stream|key|name|emoji\n"
-                "Example: driving|general|traffic_rules|Traffic Rules",
-                reply_markup=admin_back_keyboard())
-            return
-        prefix = "upload_subject_" if has_upload else "aq_subject_"
-        await query.edit_message_text("🚗 Choose subject:", reply_markup=build_subject_keyboard(subjects, prefix=prefix))
-
-    elif data == "aq_type_remedial":
-        context.user_data["aq_exam_type"] = "remedial"
-        if has_upload:
-            context.user_data["upload_exam_type"] = "remedial"
-        await query.edit_message_text("📝 Choose stream:", reply_markup=admin_stream_keyboard())
-
-    elif data == "aq_type_mock":
-        context.user_data["aq_exam_type"] = "mock"
-        if has_upload:
-            context.user_data["upload_exam_type"] = "mock"
-        # Show ALL exit + coc departments as upload targets for mock questions
-        exit_depts = await get_depts("exit")
-        coc_depts  = await get_depts("coc")
-
-        buttons = []
-        if exit_depts:
-            buttons.append([InlineKeyboardButton(
-                "── 🎓 Exit Exam Departments ──",
-                callback_data="aq_mock_stream_noop")])
-            row = []
-            for d in exit_depts:
-                row.append(InlineKeyboardButton(
-                    f"{d['emoji']} {d['dept_name']}",
-                    callback_data=f"aq_mock_dept_{d['dept_key']}"))
-                if len(row) == 2:
-                    buttons.append(row)
-                    row = []
-            if row:
-                buttons.append(row)
-
-        if coc_depts:
-            buttons.append([InlineKeyboardButton(
-                "── 🏅 CoC Departments ──",
-                callback_data="aq_mock_stream_noop")])
-            row = []
-            for d in coc_depts:
-                row.append(InlineKeyboardButton(
-                    f"{d['emoji']} {d['dept_name']}",
-                    callback_data=f"aq_mock_dept_{d['dept_key']}"))
-                if len(row) == 2:
-                    buttons.append(row)
-                    row = []
-            if row:
-                buttons.append(row)
-
-        # Also offer a "General / Mixed" option
-        buttons.append([InlineKeyboardButton(
-            "📋 General / Mixed Subjects",
-            callback_data="aq_mock_dept_general")])
-        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back")])
-
-        await query.edit_message_text(
-            "📋 *Model / Mock Exam Upload*\n\n"
-            "Choose a department to upload mock questions for:\n\n"
-            "Questions will be stored as Mock Exam and users\n"
-            "can access them by department.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(buttons))
-
-    elif data == "aq_mock_stream_noop":
-        # Section header tapped — do nothing
-        await query.answer("Select a department below.", show_alert=False)
-        return
-
-    elif data.startswith("aq_mock_stream_"):
-        stream = data.replace("aq_mock_stream_", "")
-        has_upload = bool(context.user_data.get("parsed_questions"))
-        context.user_data["aq_stream"] = stream
-        if has_upload:
-            context.user_data["upload_stream"] = stream
-        subjects = await get_subjects("mock", stream)
-        if not subjects:
-            await query.edit_message_text(
-                f"⚠️ No mock subjects found for stream *{stream}*.\n\n"
-                "Add subjects first via Manage Subjects.\n"
-                "Format: `mock|{stream}|key|name|emoji`",
-                parse_mode="Markdown",
-                reply_markup=admin_back_keyboard())
-            return
-        prefix = "upload_subject_" if has_upload else "aq_subject_"
-        await query.edit_message_text(
-            f"📋 Mock — Choose subject:",
-            reply_markup=build_subject_keyboard(subjects, prefix=prefix))
-
-    elif data.startswith("aq_mock_dept_"):
-        dept_key = data.replace("aq_mock_dept_", "")
-        has_upload = bool(context.user_data.get("parsed_questions"))
-        context.user_data["aq_stream"] = dept_key
-        if has_upload:
-            context.user_data["upload_stream"] = dept_key
-
-        if dept_key == "general":
-            # General mock — use general subject list
-            dept_label = "General / Mixed"
-            all_subjects = []
-        else:
-            # Get dept info
-            async with aiosqlite.connect(DATABASE_PATH) as db:
-                db.row_factory = aiosqlite.Row
-                cur = await db.execute(
-                    "SELECT dept_name, emoji FROM departments WHERE dept_key=?", (dept_key,))
-                dept_row = await cur.fetchone()
-            dept_label = f"{dept_row['emoji']} {dept_row['dept_name']}" if dept_row else dept_key.replace("_", " ").title()
-            all_subjects = []
-
-        # Build subject list: subjects from subjects table for this dept/stream,
-        # OR fall back to showing subjects from the dept's own exam type,
-        # OR allow admin to type subject name (for manual entry)
-        # Strategy: look for subjects in subjects table with stream=dept_key (any exam_type)
-        # OR show a nice list from the exit/coc subjects for that dept
-        async with aiosqlite.connect(DATABASE_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            # Try mock subjects for this stream first
-            cur = await db.execute(
-                "SELECT * FROM subjects WHERE exam_type='mock' AND stream=? ORDER BY subject_name",
-                (dept_key,))
-            mock_subjs = [dict(r) for r in await cur.fetchall()]
-
-            # Also get subjects from exit or coc for this dept
-            cur2 = await db.execute(
-                "SELECT * FROM subjects WHERE stream=? AND exam_type IN ('exit','coc') ORDER BY subject_name",
-                (dept_key,))
-            dept_subjs = [dict(r) for r in await cur2.fetchall()]
-
-        # Merge: prefer mock-tagged ones, add exit/coc subjects as options
-        combined = mock_subjs[:]
-        seen_names = {s["subject_name"] for s in mock_subjs}
-        for s in dept_subjs:
-            if s["subject_name"] not in seen_names:
-                combined.append(s)
-                seen_names.add(s["subject_name"])
-
-        # Build dynamic subject buttons for upload
-        prefix = "upload_subject_" if has_upload else "aq_subject_"
-
-        if not combined:
-            # No subjects — offer to upload directly to the dept as subject
-            if has_upload:
-                context.user_data["upload_subject"] = dept_key
-                parsed = context.user_data.get("parsed_questions", [])
-                await query.edit_message_text(
-                    f"✅ Ready to save *{len(parsed)} questions*\n\n"
-                    f"📋 Department: *{dept_label}*\n"
-                    f"📚 Exam: Mock\n\n"
-                    "Questions will be saved under this department.\nConfirm?",
-                    parse_mode="Markdown",
-                    reply_markup=admin_confirm_keyboard())
-            else:
-                context.user_data["aq_subject"] = dept_key
-                context.user_data["aq_subject_label"] = dept_label
-                context.user_data["waiting_for"] = "aq_question_text"
-                await query.edit_message_text(
-                    f"📝 *Mock — {dept_label}*\n\nType the question text:\nType /cancel to abort.",
-                    parse_mode="Markdown")
-            return
-
-        # Build buttons for combined subjects
-        buttons = []
-        row = []
-        for s in combined:
-            row.append(InlineKeyboardButton(
-                f"{s.get('emoji','📘')} {s['subject_name']}",
-                callback_data=f"{prefix}{s['subject_key']}"))
-            if len(row) == 2:
-                buttons.append(row)
-                row = []
-        if row:
-            buttons.append(row)
-        # Add option to upload to the whole dept as one subject
-        buttons.append([InlineKeyboardButton(
-            f"📂 All of {dept_label} (as one subject)",
-            callback_data=f"{prefix}{dept_key}")])
-        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="aq_type_mock")])
-
-        await query.edit_message_text(
-            f"📋 *Mock Upload — {dept_label}*\n\n"
-            "Choose which subject to upload questions for:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(buttons))
-
-    elif data == "aq_stream_natural":
-        exam_type = context.user_data.get("aq_exam_type", "entrance")
-        context.user_data["aq_stream"] = "natural"
-        subjects = await get_subjects(exam_type, "natural")
-        if has_upload:
-            context.user_data["upload_stream"] = "natural"
-            await query.edit_message_text(
-                "🔬 Choose subject:", reply_markup=build_subject_keyboard(subjects, prefix="upload_subject_"))
-        else:
-            await query.edit_message_text(
-                "🔬 Choose subject:", reply_markup=build_subject_keyboard(subjects))
-
-    elif data == "aq_stream_social":
-        exam_type = context.user_data.get("aq_exam_type", "entrance")
-        context.user_data["aq_stream"] = "social"
-        subjects = await get_subjects(exam_type, "social")
-        if has_upload:
-            context.user_data["upload_stream"] = "social"
-            await query.edit_message_text(
-                "📚 Choose subject:", reply_markup=build_subject_keyboard(subjects, prefix="upload_subject_"))
-        else:
-            await query.edit_message_text(
-                "📚 Choose subject:", reply_markup=build_subject_keyboard(subjects))
+            "📝 Subject: " + context.user_data["aq_subject_label"] +
+            "\n\nType the question text:\nType /cancel to abort.")
 
     elif data.startswith("aq_dept_"):
         dept = data.replace("aq_dept_", "")
         exam_type = context.user_data.get("aq_exam_type", "exit")
+        has_upload = bool(context.user_data.get("parsed_questions"))
         if has_upload:
             context.user_data["upload_stream"] = dept
             subjects = await get_subjects(exam_type, dept)
@@ -765,19 +463,231 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     "Exam: " + exam_type.title() + "\n\nConfirm?",
                     reply_markup=admin_confirm_keyboard())
         else:
-            context.user_data["aq_stream"] = dept
-            context.user_data["aq_subject"] = dept
+            context.user_data["aq_stream"]        = dept
+            context.user_data["aq_subject"]       = dept
             context.user_data["aq_subject_label"] = dept.replace("_", " ").title()
-            context.user_data["waiting_for"] = "aq_question_text"
+            context.user_data["waiting_for"]      = "aq_question_text"
             await query.edit_message_text(
-                "📝 Department: " + dept.replace("_", " ").title() + "\n\nType the question text:\nType /cancel to abort.")
+                "📝 Department: *" + dept.replace("_", " ").title() + "*\n\nType the question text:\nType /cancel to abort.",
+                parse_mode="Markdown")
+
+    elif data.startswith("edit_q_field_"):
+        field = data.replace("edit_q_field_", "")
+        context.user_data["edit_field"]  = field
+        context.user_data["waiting_for"] = "edit_q_value"
+        labels = {
+            "question_text": "question text", "option_a": "Option A",
+            "option_b": "Option B", "option_c": "Option C", "option_d": "Option D",
+            "correct_answer": "correct answer (A/B/C/D)",
+            "explanation": "explanation", "reference": "reference",
+            "year": "year (number or type none)",
+        }
+        await query.edit_message_text("✏️ Send the new " + labels.get(field, field) + ":")
+
+    elif data.startswith("rcpt_ok_"):
+        await approve_receipt(query, context, data)
+    elif data.startswith("rcpt_no_"):
+        await reject_receipt(query, context, data)
+
+
+# ─────────────────────── Upload handler (upload flow callbacks) ──────────────
+
+async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    uid  = query.from_user.id
+    if not await is_any_admin(uid):
+        return
+    has_upload = bool(context.user_data.get("parsed_questions"))
+
+    if data == "aq_type_entrance":
+        context.user_data["aq_exam_type"] = "entrance"
+        if has_upload: context.user_data["upload_exam_type"] = "entrance"
+        await query.edit_message_text("📚 Choose stream:", reply_markup=admin_stream_keyboard())
+
+    elif data == "aq_type_exit":
+        context.user_data["aq_exam_type"] = "exit"
+        if has_upload: context.user_data["upload_exam_type"] = "exit"
+        depts = await get_depts("exit")
+        if not depts:
+            await query.edit_message_text(
+                "⚠️ No Exit Exam departments found.\n\n"
+                "Add departments first:\nAdmin Panel → Manage Departments\n\n"
+                "Format: `exit|key|name|emoji`\nExample: `exit|nursing|Nursing|🩺`",
+                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            return
+        await query.edit_message_text("🏛️ Choose department:", reply_markup=build_dept_keyboard(depts))
+
+    elif data == "aq_type_coc":
+        context.user_data["aq_exam_type"] = "coc"
+        if has_upload: context.user_data["upload_exam_type"] = "coc"
+        depts = await get_depts("coc")
+        if not depts:
+            await query.edit_message_text(
+                "⚠️ No CoC departments found.\n\n"
+                "Add departments first via Manage Departments.\n"
+                "Format: `coc|key|name|emoji`\nExample: `coc|coc_electrical|Electrical|⚡`",
+                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            return
+        await query.edit_message_text("📋 Choose CoC department:", reply_markup=build_dept_keyboard(depts))
+
+    elif data == "aq_type_driving":
+        context.user_data["aq_exam_type"] = "driving"
+        context.user_data["aq_stream"]    = "general"
+        if has_upload:
+            context.user_data["upload_exam_type"] = "driving"
+            context.user_data["upload_stream"]    = "general"
+        subjects = await get_subjects("driving", "general")
+        if not subjects:
+            await query.edit_message_text(
+                "⚠️ No Driving subjects found.\n\n"
+                "Add subjects first via Manage Subjects.\n"
+                "Format: `driving|general|key|name|emoji`",
+                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            return
+        prefix = "upload_subject_" if has_upload else "aq_subject_"
+        await query.edit_message_text("🚗 Choose subject:", reply_markup=build_subject_keyboard(subjects, prefix=prefix))
+
+    elif data == "aq_type_remedial":
+        context.user_data["aq_exam_type"] = "remedial"
+        if has_upload: context.user_data["upload_exam_type"] = "remedial"
+        await query.edit_message_text("📝 Choose stream:", reply_markup=admin_stream_keyboard())
+
+    elif data == "aq_type_mock":
+        context.user_data["aq_exam_type"] = "mock"
+        if has_upload: context.user_data["upload_exam_type"] = "mock"
+        exit_depts = await get_depts("exit")
+        coc_depts  = await get_depts("coc")
+        buttons = []
+        if exit_depts:
+            buttons.append([InlineKeyboardButton("── 🎓 Exit Exam Departments ──", callback_data="aq_mock_stream_noop")])
+            row = []
+            for d in exit_depts:
+                row.append(InlineKeyboardButton(f"{d['emoji']} {d['dept_name']}", callback_data=f"aq_mock_dept_{d['dept_key']}"))
+                if len(row) == 2: buttons.append(row); row = []
+            if row: buttons.append(row)
+        if coc_depts:
+            buttons.append([InlineKeyboardButton("── 🏅 CoC Departments ──", callback_data="aq_mock_stream_noop")])
+            row = []
+            for d in coc_depts:
+                row.append(InlineKeyboardButton(f"{d['emoji']} {d['dept_name']}", callback_data=f"aq_mock_dept_{d['dept_key']}"))
+                if len(row) == 2: buttons.append(row); row = []
+            if row: buttons.append(row)
+        buttons.append([InlineKeyboardButton("📋 General / Mixed Subjects", callback_data="aq_mock_dept_general")])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back")])
+        await query.edit_message_text(
+            "📋 *Model / Mock Exam Upload*\n\nChoose a department:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif data == "aq_mock_stream_noop":
+        await query.answer("Select a department below.", show_alert=False)
+        return
+
+    elif data.startswith("aq_mock_stream_"):
+        stream     = data.replace("aq_mock_stream_", "")
+        has_upload = bool(context.user_data.get("parsed_questions"))
+        context.user_data["aq_stream"] = stream
+        if has_upload: context.user_data["upload_stream"] = stream
+        subjects = await get_subjects("mock", stream)
+        if not subjects:
+            await query.edit_message_text(
+                f"⚠️ No mock subjects found for stream *{stream}*.\n\nAdd subjects first.",
+                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            return
+        prefix = "upload_subject_" if has_upload else "aq_subject_"
+        await query.edit_message_text("📋 Mock — Choose subject:", reply_markup=build_subject_keyboard(subjects, prefix=prefix))
+
+    elif data.startswith("aq_mock_dept_"):
+        dept_key   = data.replace("aq_mock_dept_", "")
+        has_upload = bool(context.user_data.get("parsed_questions"))
+        context.user_data["aq_stream"] = dept_key
+        if has_upload: context.user_data["upload_stream"] = dept_key
+
+        if dept_key == "general":
+            dept_label = "General / Mixed"
+        else:
+            async with aiosqlite.connect(DATABASE_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                cur      = await db.execute("SELECT dept_name, emoji FROM departments WHERE dept_key=?", (dept_key,))
+                dept_row = await cur.fetchone()
+            dept_label = f"{dept_row['emoji']} {dept_row['dept_name']}" if dept_row else dept_key.replace("_", " ").title()
+
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur        = await db.execute(
+                "SELECT * FROM subjects WHERE exam_type='mock' AND stream=? ORDER BY subject_name", (dept_key,))
+            mock_subjs = [dict(r) for r in await cur.fetchall()]
+            cur2       = await db.execute(
+                "SELECT * FROM subjects WHERE stream=? AND exam_type IN ('exit','coc') ORDER BY subject_name", (dept_key,))
+            dept_subjs = [dict(r) for r in await cur2.fetchall()]
+
+        combined   = mock_subjs[:]
+        seen_names = {s["subject_name"] for s in mock_subjs}
+        for s in dept_subjs:
+            if s["subject_name"] not in seen_names:
+                combined.append(s); seen_names.add(s["subject_name"])
+
+        prefix = "upload_subject_" if has_upload else "aq_subject_"
+        if not combined:
+            if has_upload:
+                context.user_data["upload_subject"] = dept_key
+                parsed = context.user_data.get("parsed_questions", [])
+                await query.edit_message_text(
+                    f"✅ Ready to save *{len(parsed)} questions*\n\n"
+                    f"📋 Department: *{dept_label}*\n📚 Exam: Mock\n\nConfirm?",
+                    parse_mode="Markdown", reply_markup=admin_confirm_keyboard())
+            else:
+                context.user_data["aq_subject"]       = dept_key
+                context.user_data["aq_subject_label"] = dept_label
+                context.user_data["waiting_for"]      = "aq_question_text"
+                await query.edit_message_text(
+                    f"📝 *Mock — {dept_label}*\n\nType the question text:\nType /cancel to abort.",
+                    parse_mode="Markdown")
+            return
+
+        buttons = []
+        row     = []
+        for s in combined:
+            row.append(InlineKeyboardButton(
+                f"{s.get('emoji','📘')} {s['subject_name']}",
+                callback_data=f"{prefix}{s['subject_key']}"))
+            if len(row) == 2: buttons.append(row); row = []
+        if row: buttons.append(row)
+        buttons.append([InlineKeyboardButton(f"📂 All of {dept_label}", callback_data=f"{prefix}{dept_key}")])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="aq_type_mock")])
+        await query.edit_message_text(
+            f"📋 *Mock Upload — {dept_label}*\n\nChoose subject:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif data == "aq_stream_natural":
+        exam_type  = context.user_data.get("aq_exam_type", "entrance")
+        context.user_data["aq_stream"] = "natural"
+        subjects   = await get_subjects(exam_type, "natural")
+        if has_upload:
+            context.user_data["upload_stream"] = "natural"
+            await query.edit_message_text("🔬 Choose subject:", reply_markup=build_subject_keyboard(subjects, prefix="upload_subject_"))
+        else:
+            await query.edit_message_text("🔬 Choose subject:", reply_markup=build_subject_keyboard(subjects))
+
+    elif data == "aq_stream_social":
+        exam_type  = context.user_data.get("aq_exam_type", "entrance")
+        context.user_data["aq_stream"] = "social"
+        subjects   = await get_subjects(exam_type, "social")
+        if has_upload:
+            context.user_data["upload_stream"] = "social"
+            await query.edit_message_text("📚 Choose subject:", reply_markup=build_subject_keyboard(subjects, prefix="upload_subject_"))
+        else:
+            await query.edit_message_text("📚 Choose subject:", reply_markup=build_subject_keyboard(subjects))
 
     elif data.startswith("upload_subject_"):
-        subject = data.replace("upload_subject_", "")
+        subject   = data.replace("upload_subject_", "")
         context.user_data["upload_subject"] = subject
-        parsed = context.user_data.get("parsed_questions", [])
+        parsed    = context.user_data.get("parsed_questions", [])
         exam_type = context.user_data.get("upload_exam_type", "entrance")
-        stream = context.user_data.get("upload_stream", "natural")
+        stream    = context.user_data.get("upload_stream", "natural")
         await query.edit_message_text(
             "✅ Ready to save " + str(len(parsed)) + " questions\n\n"
             "Subject: " + subject.replace("_", " ").title() + "\n"
@@ -790,6 +700,8 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             await save_question_from_context(query, context)
 
+
+# ─────────────────────── Text handler ────────────────────────────────────────
 
 async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -820,8 +732,8 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(msg, parse_mode="Markdown")
 
     elif waiting == "aq_option_d":
-        context.user_data["aq_option_d"] = text
-        context.user_data["waiting_for"] = "aq_correct_answer"
+        context.user_data["aq_option_d"]   = text
+        context.user_data["waiting_for"]   = "aq_correct_answer"
         await update.message.reply_text("✅ OK. Correct answer: *A*, *B*, *C*, or *D*?", parse_mode="Markdown")
 
     elif waiting == "aq_correct_answer":
@@ -829,17 +741,17 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text("⚠️ Must be A, B, C, or D. Try again:")
             return
         context.user_data["aq_correct_answer"] = text.upper()
-        context.user_data["waiting_for"] = "aq_explanation"
+        context.user_data["waiting_for"]       = "aq_explanation"
         await update.message.reply_text("✅ OK. Type the *explanation*:", parse_mode="Markdown")
 
     elif waiting == "aq_explanation":
         context.user_data["aq_explanation"] = text
-        context.user_data["waiting_for"] = "aq_reference"
+        context.user_data["waiting_for"]    = "aq_reference"
         await update.message.reply_text("✅ OK. Type *reference* or type `none`:", parse_mode="Markdown")
 
     elif waiting == "aq_reference":
-        context.user_data["aq_reference"] = "" if text.lower() == "none" else text
-        context.user_data["waiting_for"] = "aq_year"
+        context.user_data["aq_reference"]  = "" if text.lower() == "none" else text
+        context.user_data["waiting_for"]   = "aq_year"
         await update.message.reply_text("✅ OK. Type *exam year* (e.g. 2023) or `none`:", parse_mode="Markdown")
 
     elif waiting == "aq_year":
@@ -883,13 +795,11 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         stream_or_dept = parts[3].strip()
         stream = stream_or_dept if exam_type in ("entrance", "remedial", "driving") else ""
         dept   = stream_or_dept if exam_type in ("exit", "coc") else ""
-
         async with aiosqlite.connect(DATABASE_PATH) as db:
             cur = await db.execute("SELECT full_name FROM users WHERE telegram_id=?", (tid,))
             row = await cur.fetchone()
             if not row:
-                await update.message.reply_text(
-                    "⚠️ User not found. They must /start the bot first.")
+                await update.message.reply_text("⚠️ User not found. They must /start the bot first.")
                 context.user_data.clear()
                 return
             await db.execute(
@@ -899,27 +809,26 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "WHERE telegram_id=?",
                 (exam_type, stream, dept, tid))
             await db.commit()
-
         context.user_data.clear()
         label = exam_type.title()
-        if stream:
-            label += " / " + stream.title()
-        if dept:
-            label += " / " + dept.replace("_", " ").title()
+        if stream: label += " / " + stream.title()
+        if dept:   label += " / " + dept.replace("_", " ").title()
         await update.message.reply_text(
-            "✅ *Subscription granted!*\n\nUser: " + str(row[0] or tid) + "\nAccess: " + label + "\nDuration: " + str(days) + " days",
+            "✅ *Subscription granted!*\n\nUser: " + str(row[0] or tid) +
+            "\nAccess: " + label + "\nDuration: " + str(days) + " days",
             parse_mode="Markdown", reply_markup=admin_back_keyboard())
         try:
             await context.bot.send_message(
                 chat_id=tid,
-                text="🎉 Your subscription is activated!\n\nAccess: " + label + "\nDuration: " + str(days) + " days\n\nStart practicing now! Send /start")
+                text="🎉 Your subscription is activated!\n\nAccess: " + label +
+                     "\nDuration: " + str(days) + " days\n\nStart practicing now! Send /start")
         except Exception:
             pass
 
     elif waiting == "broadcast_msg":
         context.user_data.clear()
         async with aiosqlite.connect(DATABASE_PATH) as db:
-            cur = await db.execute("SELECT telegram_id FROM users")
+            cur   = await db.execute("SELECT telegram_id FROM users")
             users = await cur.fetchall()
         sent = failed = 0
         for (u,) in users:
@@ -936,7 +845,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parts = [p.strip() for p in text.split("|")]
         if len(parts) not in [4, 5]:
             await update.message.reply_text(
-                "⚠️ Wrong format.\nUse: `exam_type|stream|key|name|emoji`\n\nExample: `entrance|natural|physics|Physics|⚡`",
+                "⚠️ Format: `exam_type|stream|key|name|emoji`\n\nExample: `entrance|natural|physics|Physics|⚡`",
                 parse_mode="Markdown")
             return
         exam_type_s, stream_s, key_s, name_s = parts[0], parts[1], parts[2], parts[3]
@@ -1035,8 +944,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data.clear()
 
     elif waiting == "add_subadmin":
-        try:
-            tid = int(text)
+        try:   tid = int(text)
         except ValueError:
             await update.message.reply_text("⚠️ Must be a number.")
             return
@@ -1061,8 +969,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data.clear()
 
     elif waiting == "remove_admin":
-        try:
-            tid = int(text)
+        try:   tid = int(text)
         except ValueError:
             await update.message.reply_text("⚠️ Must be a number.")
             return
@@ -1073,8 +980,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data.clear()
 
     elif waiting == "edit_question_id":
-        try:
-            qid = int(text)
+        try:   qid = int(text)
         except ValueError:
             await update.message.reply_text("⚠️ Must be a number.")
             return
@@ -1087,7 +993,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         q = dict(row)
         context.user_data["edit_question_id"] = qid
-        context.user_data["waiting_for"] = None
+        context.user_data["waiting_for"]      = None
         preview = (
             "ID:" + str(q["id"]) + "  Subject:" + str(q["subject"]) + "  Year:" + str(q.get("year") or "N/A") + "\n\n"
             "Q: " + str(q["question_text"]) + "\n\n"
@@ -1123,10 +1029,8 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await update.message.reply_text("⚠️ Must be A, B, C, or D.")
                 return
         if field == "year":
-            try:
-                value = int(text) if text.lower() != "none" else None
-            except ValueError:
-                value = None
+            try:   value = int(text) if text.lower() != "none" else None
+            except ValueError: value = None
         async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute("UPDATE questions SET " + field + "=? WHERE id=?", (value, qid))
             await db.commit()
@@ -1134,8 +1038,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("✅ Question " + str(qid) + " updated!", reply_markup=admin_back_keyboard())
 
     elif waiting == "delete_question_id":
-        try:
-            qid = int(text)
+        try:   qid = int(text)
         except ValueError:
             await update.message.reply_text("⚠️ Must be a number.")
             return
@@ -1150,12 +1053,10 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("✅ Question " + str(qid) + " deleted.", reply_markup=admin_back_keyboard())
         context.user_data.clear()
 
-    # ── Bulk Delete Confirmations ──────────────────────────────────────────
+    # ── Bulk Delete Confirmations ─────────────────────────────────────────────
     elif waiting == "bd_confirm_type":
         if text.strip() != "YES DELETE":
-            await update.message.reply_text(
-                "❌ Cancelled. You must type exactly `YES DELETE` to confirm.",
-                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            await update.message.reply_text("❌ Cancelled. Type exactly `YES DELETE`.", parse_mode="Markdown", reply_markup=admin_back_keyboard())
             context.user_data.clear()
             return
         exam_type = context.user_data.get("bd_exam_type", "")
@@ -1163,16 +1064,12 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             cur = await db.execute("DELETE FROM questions WHERE exam_type=?", (exam_type,))
             await db.commit()
             deleted = cur.rowcount
-        await update.message.reply_text(
-            f"✅ Deleted *{deleted} questions* for exam type: *{exam_type.title()}*",
-            parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        await update.message.reply_text(f"✅ Deleted *{deleted} questions* for type *{exam_type.title()}*", parse_mode="Markdown", reply_markup=admin_back_keyboard())
         context.user_data.clear()
 
     elif waiting == "bd_confirm_subject":
         if text.strip() != "YES DELETE":
-            await update.message.reply_text(
-                "❌ Cancelled. You must type exactly `YES DELETE` to confirm.",
-                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            await update.message.reply_text("❌ Cancelled. Type exactly `YES DELETE`.", parse_mode="Markdown", reply_markup=admin_back_keyboard())
             context.user_data.clear()
             return
         subj = context.user_data.get("bd_subject", "")
@@ -1180,16 +1077,12 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             cur = await db.execute("DELETE FROM questions WHERE subject=?", (subj,))
             await db.commit()
             deleted = cur.rowcount
-        await update.message.reply_text(
-            f"✅ Deleted *{deleted} questions* for subject: *{subj.replace('_',' ').title()}*",
-            parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        await update.message.reply_text(f"✅ Deleted *{deleted} questions* for subject *{subj.replace('_',' ').title()}*", parse_mode="Markdown", reply_markup=admin_back_keyboard())
         context.user_data.clear()
 
     elif waiting == "bd_confirm_year":
         if text.strip() != "YES DELETE":
-            await update.message.reply_text(
-                "❌ Cancelled. You must type exactly `YES DELETE` to confirm.",
-                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            await update.message.reply_text("❌ Cancelled. Type exactly `YES DELETE`.", parse_mode="Markdown", reply_markup=admin_back_keyboard())
             context.user_data.clear()
             return
         yr = context.user_data.get("bd_year", "")
@@ -1197,44 +1090,33 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             cur = await db.execute("DELETE FROM questions WHERE year=?", (yr,))
             await db.commit()
             deleted = cur.rowcount
-        await update.message.reply_text(
-            f"✅ Deleted *{deleted} questions* for year: *{yr}*",
-            parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        await update.message.reply_text(f"✅ Deleted *{deleted} questions* for year *{yr}*", parse_mode="Markdown", reply_markup=admin_back_keyboard())
         context.user_data.clear()
 
     elif waiting == "bd_confirm_subject_year":
         if text.strip() != "YES DELETE":
-            await update.message.reply_text(
-                "❌ Cancelled. You must type exactly `YES DELETE` to confirm.",
-                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            await update.message.reply_text("❌ Cancelled. Type exactly `YES DELETE`.", parse_mode="Markdown", reply_markup=admin_back_keyboard())
             context.user_data.clear()
             return
         subj = context.user_data.get("bd_subject", "")
-        yr = context.user_data.get("bd_year", "")
+        yr   = context.user_data.get("bd_year", "")
         async with aiosqlite.connect(DATABASE_PATH) as db:
-            cur = await db.execute(
-                "DELETE FROM questions WHERE subject=? AND year=?", (subj, yr))
+            cur = await db.execute("DELETE FROM questions WHERE subject=? AND year=?", (subj, yr))
             await db.commit()
             deleted = cur.rowcount
-        await update.message.reply_text(
-            f"✅ Deleted *{deleted} questions* for *{subj.replace('_',' ').title()}* / year *{yr}*",
-            parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        await update.message.reply_text(f"✅ Deleted *{deleted} questions* for *{subj.replace('_',' ').title()}* / *{yr}*", parse_mode="Markdown", reply_markup=admin_back_keyboard())
         context.user_data.clear()
 
     elif waiting == "bd_confirm_all":
         if text.strip() != "YES DELETE ALL":
-            await update.message.reply_text(
-                "❌ Cancelled. You must type exactly `YES DELETE ALL` to confirm.",
-                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            await update.message.reply_text("❌ Cancelled. Type exactly `YES DELETE ALL`.", parse_mode="Markdown", reply_markup=admin_back_keyboard())
             context.user_data.clear()
             return
         async with aiosqlite.connect(DATABASE_PATH) as db:
             cur = await db.execute("DELETE FROM questions")
             await db.commit()
             deleted = cur.rowcount
-        await update.message.reply_text(
-            f"☢️ Deleted ALL *{deleted} questions* from the database.",
-            parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        await update.message.reply_text(f"☢️ Deleted ALL *{deleted} questions* from the database.", parse_mode="Markdown", reply_markup=admin_back_keyboard())
         context.user_data.clear()
 
     elif waiting == "giveaway_info":
@@ -1242,8 +1124,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if len(parts) != 2:
             await update.message.reply_text("⚠️ Format: `days|max_uses`\n\nExample: `7|100`", parse_mode="Markdown")
             return
-        try:
-            days, max_uses = int(parts[0]), int(parts[1])
+        try:   days, max_uses = int(parts[0]), int(parts[1])
         except ValueError:
             await update.message.reply_text("⚠️ Both must be numbers.")
             return
@@ -1255,7 +1136,8 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await db.commit()
         context.user_data.clear()
         await update.message.reply_text(
-            "🎁 *Giveaway Code Created!*\n\nCode: `" + code + "`\nDuration: " + str(days) + " days free access\nMax Uses: " + str(max_uses) + " students\n\nStudents redeem with: `/redeem " + code + "`",
+            "🎁 *Giveaway Code Created!*\n\nCode: `" + code + "`\nDuration: " + str(days) +
+            " days\nMax Uses: " + str(max_uses) + "\n\nStudents redeem with: `/redeem " + code + "`",
             parse_mode="Markdown", reply_markup=admin_back_keyboard())
 
     elif waiting == "edit_bank_info":
@@ -1276,10 +1158,20 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data.clear()
 
 
+# ─────────────────────── File handler ────────────────────────────────────────
+
 async def admin_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not await is_any_admin(uid):
         return
+
+    # ── Route backup restore file ─────────────────────────────────────────────
+    if context.user_data.get("waiting_for") == "backup_restore_file":
+        from app.handlers.backup import backup_file_handler
+        await backup_file_handler(update, context)
+        return
+
+    # ── Normal question file upload ───────────────────────────────────────────
     if context.user_data.get("waiting_for") != "question_file":
         return
     doc = update.message.document
@@ -1293,7 +1185,8 @@ async def admin_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not parsed:
         await update.message.reply_text(
             "⚠️ *No valid questions found.*\n\nCheck the format:\n\n"
-            "```\nQ: Question text\nA) ...\nB) ...\nC) ...\nD) ...\nAnswer: B\nExplanation: ...\n```\n\nSeparate questions with a blank line.",
+            "```\nQ: Question text\nA) ...\nB) ...\nC) ...\nD) ...\nAnswer: B\nExplanation: ...\n```\n\n"
+            "Separate questions with a blank line.",
             parse_mode="Markdown")
         return
     context.user_data["parsed_questions"] = parsed
@@ -1304,6 +1197,8 @@ async def admin_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup=admin_exam_type_keyboard())
 
 
+# ─────────────────────── Save helpers ────────────────────────────────────────
+
 async def save_bulk_questions(query, context):
     parsed    = context.user_data.get("parsed_questions", [])
     exam_type = context.user_data.get("upload_exam_type", "entrance")
@@ -1311,9 +1206,7 @@ async def save_bulk_questions(query, context):
     subject   = context.user_data.get("upload_subject", "")
 
     if exam_type in ("exit", "coc") and not stream:
-        await query.edit_message_text(
-            "⚠️ Department not set. Please start upload again.",
-            reply_markup=admin_back_keyboard())
+        await query.edit_message_text("⚠️ Department not set. Start upload again.", reply_markup=admin_back_keyboard())
         context.user_data.clear()
         return
 
@@ -1321,548 +1214,446 @@ async def save_bulk_questions(query, context):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         for q in parsed:
             try:
-                cur = await db.execute(
-                    "SELECT id FROM questions WHERE exam_type=? AND stream=? AND subject=? AND question_text=?",
-                    (exam_type, stream, subject, q.get("question_text", "")))
-                if await cur.fetchone():
-                    failed += 1
-                    continue
                 await db.execute(
                     "INSERT INTO questions "
-                    "(exam_type,stream,subject,year,question_text,"
-                    "option_a,option_b,option_c,option_d,correct_answer,explanation,reference) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (exam_type, stream, subject, q.get("year"),
-                     q.get("question_text"), q.get("option_a"), q.get("option_b"),
-                     q.get("option_c"), q.get("option_d"),
-                     (q.get("correct_answer") or "").upper(),
-                     q.get("explanation", ""), q.get("reference", "")))
+                    "(exam_type,stream,subject,question_text,option_a,option_b,option_c,option_d,"
+                    "correct_answer,explanation,reference,year) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (exam_type, stream, subject or q.get("subject", ""),
+                     q["question_text"], q["option_a"], q["option_b"],
+                     q["option_c"], q["option_d"], q["correct_answer"],
+                     q.get("explanation", ""), q.get("reference", ""), q.get("year")))
                 saved += 1
             except Exception as e:
-                logger.error(f"save_bulk_questions row error: {e}")
+                logger.error(f"save_bulk_questions error: {e}")
                 failed += 1
         await db.commit()
 
-    logger.info(f"Bulk upload: exam={exam_type} stream={stream} subject={subject} saved={saved} failed={failed}")
     context.user_data.clear()
     await query.edit_message_text(
-        "✅ Upload Complete!\n\n"
-        "Exam: " + exam_type.title() + " / " + stream + "\n"
-        "Subject: " + subject.replace("_", " ").title() + "\n"
-        "Saved: " + str(saved) + "\n"
-        "Skipped (duplicates/errors): " + str(failed),
+        f"✅ *Upload Complete!*\n\n"
+        f"Saved: *{saved}*\nFailed: *{failed}*\n\n"
+        f"Exam: *{exam_type.title()}*\n"
+        f"Stream/Dept: *{stream}*\nSubject: *{subject}*",
+        parse_mode="Markdown",
         reply_markup=admin_back_keyboard())
 
 
 async def save_question_from_context(query, context):
-    d = context.user_data
-    try:
-        async with aiosqlite.connect(DATABASE_PATH) as db:
-            await db.execute(
-                "INSERT INTO questions "
-                "(exam_type,stream,subject,year,question_text,"
-                "option_a,option_b,option_c,option_d,correct_answer,explanation,reference) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (d.get("aq_exam_type"), d.get("aq_stream"), d.get("aq_subject"),
-                 d.get("aq_year"), d.get("aq_question_text"),
-                 d.get("aq_option_a"), d.get("aq_option_b"),
-                 d.get("aq_option_c"), d.get("aq_option_d"),
-                 d.get("aq_correct_answer"),
-                 d.get("aq_explanation", ""), d.get("aq_reference", "")))
-            await db.commit()
-        context.user_data.clear()
-        await query.edit_message_text("✅ *Question saved successfully!*", parse_mode="Markdown",
-                                       reply_markup=admin_main_keyboard())
-    except Exception as e:
-        await query.edit_message_text("⚠️ Error: " + str(e), reply_markup=admin_main_keyboard())
+    d         = context.user_data
+    exam_type = d.get("aq_exam_type", "entrance")
+    stream    = d.get("aq_stream", "natural")
+    subject   = d.get("aq_subject", "")
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "INSERT INTO questions "
+            "(exam_type,stream,subject,question_text,option_a,option_b,option_c,option_d,"
+            "correct_answer,explanation,reference,year) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (exam_type, stream, subject,
+             d.get("aq_question_text"), d.get("aq_option_a"), d.get("aq_option_b"),
+             d.get("aq_option_c"), d.get("aq_option_d"), d.get("aq_correct_answer"),
+             d.get("aq_explanation", ""), d.get("aq_reference", ""), d.get("aq_year")))
+        await db.commit()
+    context.user_data.clear()
+    await query.edit_message_text("✅ *Question saved!*", parse_mode="Markdown", reply_markup=admin_back_keyboard())
 
 
-# ── Display helpers ───────────────────────────────────────────────────────────
+# ─────────────────────── View helpers ────────────────────────────────────────
+
+async def show_questions(query):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur  = await db.execute("SELECT exam_type, COUNT(*) FROM questions GROUP BY exam_type ORDER BY exam_type")
+        rows = await cur.fetchall()
+        total = sum(r[1] for r in rows)
+    if not rows:
+        await query.edit_message_text("❓ No questions in DB yet.", reply_markup=admin_back_keyboard())
+        return
+    buttons = [[InlineKeyboardButton(
+        f"📂 {et.title()} ({cnt})", callback_data=f"vq_type_{et}"
+    )] for et, cnt in rows]
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back")])
+    await query.edit_message_text(
+        f"❓ *Questions* — Total: *{total}*\n\nChoose exam type:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def show_questions_by_type(query, exam_type):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if exam_type in ("entrance", "remedial"):
+            cur  = await db.execute(
+                "SELECT stream, COUNT(*) FROM questions WHERE exam_type=? GROUP BY stream", (exam_type,))
+            rows = await cur.fetchall()
+            buttons = [[InlineKeyboardButton(
+                f"{'🔬' if s == 'natural' else '📚'} {s.title()} ({c})",
+                callback_data=f"vq_stream_{exam_type}_{s}"
+            )] for s, c in rows]
+        elif exam_type in ("exit", "coc"):
+            cur  = await db.execute(
+                "SELECT stream, COUNT(*) FROM questions WHERE exam_type=? GROUP BY stream", (exam_type,))
+            rows = await cur.fetchall()
+            buttons = [[InlineKeyboardButton(
+                f"🏛️ {s.replace('_',' ').title()} ({c})",
+                callback_data=f"vq_dept_{exam_type}_{s}"
+            )] for s, c in rows]
+        else:
+            await show_questions_list(query, exam_type, "general")
+            return
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_view_questions")])
+    await query.edit_message_text(
+        f"📂 *{exam_type.title()} Exam* — choose stream/dept:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def show_questions_list(query, exam_type, stream, offset=0, page_size=10):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        total = (await (await db.execute(
+            "SELECT COUNT(*) FROM questions WHERE exam_type=? AND stream=?",
+            (exam_type, stream))).fetchone())[0]
+        cur  = await db.execute(
+            "SELECT id, question_text, correct_answer, year FROM questions "
+            "WHERE exam_type=? AND stream=? ORDER BY id LIMIT ? OFFSET ?",
+            (exam_type, stream, page_size, offset))
+        rows = [dict(r) for r in await cur.fetchall()]
+    if not rows:
+        await query.edit_message_text("No questions found.", reply_markup=admin_back_keyboard())
+        return
+    lines = [f"📋 *{exam_type.title()} / {stream.replace('_',' ').title()}* — {total} total\n"]
+    for r in rows:
+        qt = (r["question_text"] or "")[:50].replace("*", "").replace("_", "")
+        yr = f" [{r['year']}]" if r.get("year") else ""
+        lines.append(f"`ID:{r['id']}`{yr} ✅{r['correct_answer']} — {qt}…")
+    nav = []
+    if offset > 0:
+        nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"vq_page_{exam_type}_{stream}_{offset - page_size}"))
+    if offset + page_size < total:
+        nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"vq_page_{exam_type}_{stream}_{offset + page_size}"))
+    keyboard = []
+    if nav: keyboard.append(nav)
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"vq_type_{exam_type}")])
+    await query.edit_message_text(
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard))
+
 
 async def show_users(query):
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        total   = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
-        sub     = (await (await db.execute("SELECT COUNT(*) FROM users WHERE is_subscribed=1")).fetchone())[0]
-        today   = (await (await db.execute("SELECT COUNT(*) FROM users WHERE date(last_active)=date('now')")).fetchone())[0]
-        new_today = (await (await db.execute("SELECT COUNT(*) FROM users WHERE date(created_at)=date('now')")).fetchone())[0]
-        cur = await db.execute(
-            "SELECT telegram_id,full_name,is_subscribed,subscribed_exam_type "
-            "FROM users ORDER BY created_at DESC LIMIT 15")
-        recent = await cur.fetchall()
-    lines = ""
-    for r in recent:
-        tag = "💳[" + str(r[3] or "") + "]" if r[2] else "🆓[FREE]"
-        lines += tag + " " + str(r[1] or "Unknown") + " (" + str(r[0]) + ")\n"
+        db.row_factory = aiosqlite.Row
+        total     = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
+        subscribed= (await (await db.execute("SELECT COUNT(*) FROM users WHERE is_subscribed=1")).fetchone())[0]
+        cur       = await db.execute("SELECT * FROM users ORDER BY id DESC LIMIT 10")
+        rows      = [dict(r) for r in await cur.fetchall()]
+    lines = [f"👥 *Users*\n\nTotal: *{total}*  |  Subscribed: *{subscribed}*\n\n*Latest 10:*\n"]
+    for r in rows:
+        name = (r.get("full_name") or r.get("username") or "Unknown")[:20]
+        sub  = "💎" if r.get("is_subscribed") else "🆓"
+        lines.append(f"{sub} {name} `({r['telegram_id']})`")
     await query.edit_message_text(
-        "👥 *USERS*\n\n"
-        "Total: " + str(total) + "\n"
-        "Subscribed: " + str(sub) + "\n"
-        "Free: " + str(total - sub) + "\n"
-        "Active today: " + str(today) + "\n"
-        "New today: " + str(new_today) + "\n\n"
-        "Recent 15:\n" + lines,
+        "\n".join(lines),
         parse_mode="Markdown",
         reply_markup=admin_back_keyboard())
 
 
 async def show_stats(query):
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        exams   = (await (await db.execute("SELECT COUNT(*) FROM exam_sessions WHERE completed=1")).fetchone())[0]
-        qcount  = (await (await db.execute("SELECT COUNT(*) FROM questions")).fetchone())[0]
-        row     = await (await db.execute(
-            "SELECT AVG(CAST(score AS FLOAT)/total*100) FROM exam_sessions WHERE completed=1 AND total>0")).fetchone()
-        avg     = row[0] if row[0] else 0
-        pending = (await (await db.execute("SELECT COUNT(*) FROM payments WHERE status='pending'")).fetchone())[0]
+        total_q = (await (await db.execute("SELECT COUNT(*) FROM questions")).fetchone())[0]
+        total_u = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
+        total_s = (await (await db.execute("SELECT COUNT(*) FROM exam_sessions WHERE completed=1")).fetchone())[0]
+        sub_u   = (await (await db.execute("SELECT COUNT(*) FROM users WHERE is_subscribed=1")).fetchone())[0]
         cur     = await db.execute(
-            "SELECT subject,COUNT(*) FROM exam_sessions WHERE completed=1 "
-            "GROUP BY subject ORDER BY COUNT(*) DESC LIMIT 5")
-        pop     = await cur.fetchall()
-    pop_text = "\n".join("  " + (p[0] or "?").replace("_", " ").title() + ": " + str(p[1]) for p in pop)
+            "SELECT exam_type, COUNT(*) FROM questions GROUP BY exam_type ORDER BY exam_type")
+        type_counts = {r[0]: r[1] for r in await cur.fetchall()}
+    type_lines = "\n".join(f"  • {et.title()}: {c}" for et, c in type_counts.items())
     await query.edit_message_text(
-        "📊 *STATISTICS*\n\n"
-        "Total exams taken: " + str(exams) + "\n"
-        "Questions in DB: " + str(qcount) + "\n"
-        "Avg score: " + str(round(avg, 1)) + "%\n"
-        "Pending receipts: " + str(pending) + "\n\n"
-        "Top subjects:\n" + pop_text,
+        f"📊 *Bot Statistics*\n\n"
+        f"❓ Questions: *{total_q}*\n{type_lines}\n\n"
+        f"👥 Total Users: *{total_u}*\n"
+        f"💎 Subscribed: *{sub_u}*\n"
+        f"📝 Exams taken: *{total_s}*",
         parse_mode="Markdown",
         reply_markup=admin_back_keyboard())
 
 
-async def show_questions(query):
-    """Step 1: Show exam type picker for question browsing."""
+async def list_admins(query):
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        total = (await (await db.execute("SELECT COUNT(*) FROM questions")).fetchone())[0]
-
-    # Build per-exam-type counts
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        cur = await db.execute(
-            "SELECT exam_type, COUNT(*) FROM questions GROUP BY exam_type ORDER BY exam_type")
-        counts = {r[0]: r[1] for r in await cur.fetchall()}
-
-    exam_types = [
-        ("entrance", "🎓 Entrance"),
-        ("exit",     "🏛️ Exit"),
-        ("coc",      "🏅 CoC"),
-        ("driving",  "🚗 Driving"),
-        ("remedial", "📝 Remedial"),
-        ("mock",     "📋 Mock"),
-    ]
-
-    buttons = []
-    for key, label in exam_types:
-        cnt = counts.get(key, 0)
-        buttons.append([InlineKeyboardButton(
-            f"{label} ({cnt} q)", callback_data=f"vq_type_{key}"
-        )])
-    buttons.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_back")])
-
-    await query.edit_message_text(
-        f"📚 *View Questions*\n\nTotal in DB: *{total}*\n\nSelect exam type:",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
-
-
-async def show_questions_by_type(query, exam_type: str):
-    """Step 2: Show stream/dept picker or go straight to subjects."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        total = (await (await db.execute(
-            "SELECT COUNT(*) FROM questions WHERE exam_type=?", (exam_type,))).fetchone())[0]
-
-    if exam_type in ("entrance", "remedial"):
-        buttons = [
-            [InlineKeyboardButton("🔬 Natural Science", callback_data=f"vq_stream_{exam_type}_natural")],
-            [InlineKeyboardButton("📚 Social Science",  callback_data=f"vq_stream_{exam_type}_social")],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_view_questions")],
-        ]
-        await query.edit_message_text(
-            f"📚 *{exam_type.title()} Exam* — {total} questions\n\nSelect stream:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
-
-    elif exam_type in ("exit", "coc"):
-        depts = await get_depts(exam_type)
-        buttons = []
-        for d in depts:
-            async with aiosqlite.connect(DATABASE_PATH) as db:
-                cnt = (await (await db.execute(
-                    "SELECT COUNT(*) FROM questions WHERE exam_type=? AND stream=?",
-                    (exam_type, d["dept_key"]))).fetchone())[0]
-            buttons.append([InlineKeyboardButton(
-                f"{d['emoji']} {d['dept_name']} ({cnt} q)",
-                callback_data=f"vq_dept_{exam_type}_{d['dept_key']}"
-            )])
-        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_view_questions")])
-        await query.edit_message_text(
-            f"📚 *{exam_type.upper()} Exam* — {total} questions\n\nSelect department:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
-
-    elif exam_type == "mock":
-        # Mock: show all streams (depts) that have questions
-        async with aiosqlite.connect(DATABASE_PATH) as db:
-            cur = await db.execute(
-                "SELECT DISTINCT stream, COUNT(*) as cnt FROM questions "
-                "WHERE exam_type='mock' GROUP BY stream ORDER BY stream")
-            mock_streams = [{"stream": r[0], "cnt": r[1]} for r in await cur.fetchall()]
-
-        if not mock_streams:
-            await show_questions_list(query, "mock", "general")
-            return
-
-        buttons = []
-        for ms in mock_streams:
-            st = ms["stream"] or "general"
-            async with aiosqlite.connect(DATABASE_PATH) as db:
-                cur = await db.execute(
-                    "SELECT dept_name, emoji FROM departments WHERE dept_key=?", (st,))
-                dept_row = await cur.fetchone()
-            if dept_row:
-                label = f"{dept_row[1]} {dept_row[0]} ({ms['cnt']} q)"
-            elif st in ("general", "mock"):
-                label = f"📋 General / Mixed ({ms['cnt']} q)"
-            else:
-                label = f"📋 {st.replace('_', ' ').title()} ({ms['cnt']} q)"
-            buttons.append([InlineKeyboardButton(
-                label, callback_data=f"vq_dept_mock_{st}")])
-
-        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_view_questions")])
-        await query.edit_message_text(
-            f"📋 *Mock Exam* — {total} questions\n\nSelect department/stream:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
-
-    else:
-        # driving — go straight to list
-        stream = "general"
-        await show_questions_list(query, exam_type, stream)
-
-
-async def show_questions_list(query, exam_type: str, stream: str, offset: int = 0):
-    """Step 3: Show actual questions for exam_type + stream."""
-    PAGE = 15
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        total = (await (await db.execute(
-            "SELECT COUNT(*) FROM questions WHERE exam_type=? AND stream=?",
-            (exam_type, stream))).fetchone())[0]
-        cur = await db.execute(
-            "SELECT id,subject,year,question_text FROM questions "
-            "WHERE exam_type=? AND stream=? ORDER BY subject,id LIMIT ? OFFSET ?",
-            (exam_type, stream, PAGE, offset))
-        rows = await cur.fetchall()
-
+        db.row_factory = aiosqlite.Row
+        cur  = await db.execute("SELECT * FROM admin_users ORDER BY role, id")
+        rows = [dict(r) for r in await cur.fetchall()]
     if not rows:
-        await query.edit_message_text(
-            f"📚 No questions found for *{exam_type}/{stream}*.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="admin_view_questions")]
-            ])
-        )
+        await query.edit_message_text("No sub admins added yet.", reply_markup=admin_back_keyboard())
         return
-
-    text = f"📚 *{exam_type.title()} / {stream.replace('_',' ').title()}*\n"
-    text += f"Showing {offset+1}–{min(offset+PAGE, total)} of {total}\n\n"
+    lines = ["👮 *Admin List*\n"]
     for r in rows:
-        q_preview = (r[3] or "")[:50].replace("*", "").replace("_", "")
-        text += f"🆔 {r[0]} | {(r[1] or '').replace('_',' ').title()} {r[2] or ''}\n{q_preview}...\n\n"
-
-    nav_buttons = []
-    if offset > 0:
-        nav_buttons.append(InlineKeyboardButton(
-            "◀️ Prev", callback_data=f"vq_page_{exam_type}_{stream}_{offset - PAGE}"))
-    if offset + PAGE < total:
-        nav_buttons.append(InlineKeyboardButton(
-            "Next ▶️", callback_data=f"vq_page_{exam_type}_{stream}_{offset + PAGE}"))
-
-    buttons = []
-    if nav_buttons:
-        buttons.append(nav_buttons)
-    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_view_questions")])
-
-    await query.edit_message_text(
-        text[:4000], parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
+        name = r.get("full_name") or str(r["telegram_id"])
+        lines.append(f"• {name} `({r['telegram_id']})` — {r['role']}")
+    await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=admin_back_keyboard())
 
 
 async def list_subjects(query):
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        cur = await db.execute("SELECT exam_type,stream,subject_key,subject_name,emoji FROM subjects ORDER BY exam_type,stream,subject_name")
-        rows = await cur.fetchall()
+        db.row_factory = aiosqlite.Row
+        cur  = await db.execute("SELECT * FROM subjects ORDER BY exam_type, stream, subject_name")
+        rows = [dict(r) for r in await cur.fetchall()]
     if not rows:
-        await query.edit_message_text("📚 No subjects found.", reply_markup=admin_back_keyboard())
+        await query.edit_message_text("No subjects yet.", reply_markup=admin_back_keyboard())
         return
-    text = "📚 *SUBJECTS*\n\n"
+    lines = [f"📚 *Subjects ({len(rows)} total)*\n"]
     for r in rows:
-        text += str(r[4] or "") + " " + str(r[3]) + " [" + str(r[2]) + "]\n  " + str(r[0]) + "/" + str(r[1] or "") + "\n"
-    await query.edit_message_text(text[:4000], parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        lines.append(f"{r.get('emoji','📘')} `{r['subject_key']}` — {r['subject_name']} ({r['exam_type']}/{r['stream']})")
+    text = "\n".join(lines)
+    if len(text) > 4000:
+        text = text[:4000] + "\n… (truncated)"
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=admin_back_keyboard())
 
 
 async def list_depts(query):
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        cur = await db.execute("SELECT exam_type,dept_key,dept_name,emoji FROM departments ORDER BY exam_type,dept_name")
-        rows = await cur.fetchall()
+        db.row_factory = aiosqlite.Row
+        cur  = await db.execute("SELECT * FROM departments ORDER BY exam_type, dept_name")
+        rows = [dict(r) for r in await cur.fetchall()]
     if not rows:
-        await query.edit_message_text("🏛️ No departments found.", reply_markup=admin_back_keyboard())
+        await query.edit_message_text("No departments yet.", reply_markup=admin_back_keyboard())
         return
-    text = "🏛️ *DEPARTMENTS*\n\n"
+    lines = [f"🏛️ *Departments ({len(rows)} total)*\n"]
     for r in rows:
-        text += str(r[3] or "") + " " + str(r[2]) + " [" + str(r[1]) + "]\n  " + str(r[0]) + "\n"
-    await query.edit_message_text(text[:4000], parse_mode="Markdown", reply_markup=admin_back_keyboard())
-
-
-async def list_admins(query):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        cur = await db.execute("SELECT telegram_id,full_name,role FROM admin_users ORDER BY role,full_name")
-        rows = await cur.fetchall()
-    text = "👮 *ADMINS*\n\n"
-    text += "🔑 SUPER: ID " + str(ADMIN_ID) + "\n\n"
-    for r in rows:
-        text += ("🛡️ " if r[2] == "super" else "👤 ") + str(r[1] or "Unknown") + " (" + str(r[0]) + ")\n"
-    if not rows:
-        text += "No sub-admins added yet."
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        lines.append(f"{r.get('emoji','🏛️')} `{r['dept_key']}` — {r['dept_name']} ({r['exam_type']})")
+    await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=admin_back_keyboard())
 
 
 async def list_giveaways(query):
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        cur = await db.execute(
-            "SELECT code,duration_days,max_uses,used_count,created_at "
-            "FROM giveaway_codes ORDER BY created_at DESC LIMIT 10")
-        rows = await cur.fetchall()
+        db.row_factory = aiosqlite.Row
+        cur  = await db.execute(
+            "SELECT code, duration_days, max_uses, used_count FROM giveaway_codes ORDER BY id DESC LIMIT 20")
+        rows = [dict(r) for r in await cur.fetchall()]
     if not rows:
-        await query.edit_message_text("🎁 No giveaway codes.", reply_markup=admin_back_keyboard())
+        await query.edit_message_text("No giveaway codes yet.", reply_markup=admin_back_keyboard())
         return
-    text = "🎁 *GIVEAWAY CODES*\n\n"
+    lines = ["🎁 *Active Giveaway Codes*\n"]
     for r in rows:
-        text += "`" + str(r[0]) + "` | " + str(r[1]) + " days | " + str(r[3]) + "/" + str(r[2]) + " used\n"
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        lines.append(f"`{r['code']}` — {r['duration_days']}d | Used: {r['used_count']}/{r['max_uses']}")
+    await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=admin_back_keyboard())
 
 
 async def show_pending_receipts(query, context):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT p.id,p.telegram_id,p.bank,p.exam_type,p.stream,p.dept,"
-            "p.created_at,p.receipt_file_id,u.full_name "
-            "FROM payments p LEFT JOIN users u ON p.telegram_id=u.telegram_id "
-            "WHERE p.status='pending' ORDER BY p.created_at ASC LIMIT 5")
+        cur  = await db.execute(
+            "SELECT * FROM payment_receipts WHERE status='pending' ORDER BY submitted_at DESC LIMIT 10")
         rows = [dict(r) for r in await cur.fetchall()]
     if not rows:
         await query.edit_message_text("✅ No pending receipts.", reply_markup=admin_back_keyboard())
         return
-    for p in rows:
-        label = str(p["exam_type"] or "")
-        if p["stream"] and p["stream"] not in ("general", ""):
-            label += "/" + str(p["stream"])
-        if p["dept"]:
-            label += "/" + str(p["dept"]).replace("_", " ").title()
+    for r in rows:
+        exam_type = r.get("exam_type", "")
+        stream    = r.get("stream", "")
+        dept      = r.get("dept", "")
+        label     = exam_type.title()
+        if stream: label += " / " + stream.title()
+        if dept:   label += " / " + dept.replace("_", " ").title()
         caption = (
-            "🧾 *PENDING RECEIPT*\n\n"
-            "👤 User: " + str(p["full_name"] or "Unknown") + "\n"
-            "🆔 ID: " + str(p["telegram_id"]) + "\n"
-            "🏦 Bank: " + str(p["bank"]) + "\n"
-            "📚 Exam: " + label + "\n"
-            "📅 Date: " + str(p["created_at"])[:10]
+            f"🧾 *Payment Receipt*\n\n"
+            f"User: `{r['telegram_id']}`\n"
+            f"Plan: {label}\n"
+            f"Submitted: {str(r.get('submitted_at',''))[:16]}"
         )
-        kb = receipt_action_keyboard(
-            p["id"], p["telegram_id"],
-            p["exam_type"] or "",
-            p["stream"] or "",
-            p["dept"] or "")
+        kb = receipt_action_keyboard(r["id"], r["telegram_id"], exam_type, stream, dept)
         try:
-            await context.bot.send_photo(
-                chat_id=query.from_user.id,
-                photo=p["receipt_file_id"],
-                caption=caption,
-                parse_mode="Markdown",
-                reply_markup=kb)
-        except Exception:
-            await context.bot.send_message(
-                chat_id=query.from_user.id,
-                text=caption,
-                parse_mode="Markdown",
-                reply_markup=kb)
+            if r.get("file_id"):
+                await context.bot.send_photo(
+                    chat_id=query.from_user.id,
+                    photo=r["file_id"],
+                    caption=caption,
+                    parse_mode="Markdown",
+                    reply_markup=kb)
+            else:
+                await context.bot.send_message(
+                    chat_id=query.from_user.id,
+                    text=caption,
+                    parse_mode="Markdown",
+                    reply_markup=kb)
+        except Exception as e:
+            logger.error(f"show_pending_receipts: {e}")
+    await query.edit_message_text(
+        f"🧾 *{len(rows)} pending receipt(s)* sent above. ☝️",
+        parse_mode="Markdown",
+        reply_markup=admin_back_keyboard())
 
 
 async def approve_receipt(query, context, data):
-    # FIXED: split on '|' not '_' to handle dept keys like 'computer_science'
-    parts       = data.replace("rcpt_ok_", "").split("|")
-    if len(parts) < 2:
+    # data format: rcpt_ok_{payment_id}|{telegram_id}|{exam_type}|{stream}|{dept}
+    rest    = data[len("rcpt_ok_"):]
+    parts   = rest.split("|")
+    if len(parts) < 5:
+        await query.edit_message_text("⚠️ Malformed receipt data.")
         return
-    payment_id  = int(parts[0])
+    payment_id  = parts[0]
     telegram_id = int(parts[1])
-    exam_type   = parts[2] if len(parts) > 2 else "entrance"
-    stream      = parts[3] if len(parts) > 3 and parts[3] not in ("", "None") else ""
-    dept        = parts[4] if len(parts) > 4 and parts[4] not in ("", "None") else ""
+    exam_type   = parts[2]
+    stream      = parts[3]
+    dept        = parts[4]
 
     async with aiosqlite.connect(DATABASE_PATH) as db:
+        # Check it's still pending
+        row = await (await db.execute(
+            "SELECT status FROM payment_receipts WHERE id=?", (payment_id,))).fetchone()
+        if not row:
+            await query.edit_message_text("⚠️ Receipt not found.")
+            return
+        if row[0] != "pending":
+            await query.edit_message_text(f"ℹ️ Already {row[0]}.")
+            return
+
+        # Determine subscription period (default 30 days)
+        days = 30
+        expiry = f"datetime('now','+{days} days')"
+
         await db.execute(
-            "UPDATE payments SET status='approved', reviewed_by=? WHERE id=?",
-            (query.from_user.id, payment_id))
-        await db.execute(
-            "UPDATE users SET is_subscribed=1, "
-            "subscription_expiry=datetime('now','+30 days'), "
-            "subscribed_exam_type=?, subscribed_stream=?, subscribed_dept=? "
-            "WHERE telegram_id=?",
+            f"UPDATE users SET is_subscribed=1, "
+            f"subscription_expiry={expiry}, "
+            f"subscribed_exam_type=?, subscribed_stream=?, subscribed_dept=? "
+            f"WHERE telegram_id=?",
             (exam_type, stream, dept, telegram_id))
+        await db.execute(
+            "UPDATE payment_receipts SET status='approved', reviewed_at=datetime('now') WHERE id=?",
+            (payment_id,))
         await db.commit()
 
     label = exam_type.title()
-    if stream and stream not in ("general", ""):
-        label += " / " + stream.title()
-    if dept:
-        label += " / " + dept.replace("_", " ").title()
+    if stream: label += " / " + stream.title()
+    if dept:   label += " / " + dept.replace("_", " ").title()
 
-    try:
-        await query.edit_message_caption(
-            "✅ *APPROVED* — Subscription activated.\n\n"
-            "Access: " + label + "\nDuration: 30 days",
-            parse_mode="Markdown")
-    except Exception:
-        pass
+    await query.edit_message_text(
+        f"✅ *Approved!*\n\nUser `{telegram_id}` subscribed to: *{label}*",
+        parse_mode="Markdown",
+        reply_markup=admin_back_keyboard())
     try:
         await context.bot.send_message(
             chat_id=telegram_id,
-            text="🎉 *Payment Approved!*\n\n"
-            "Your subscription is now active.\n\n"
-            "✅ Access: " + label + "\n"
-            "📅 Duration: 30 days\n\n"
-            "Start practicing now! Send /start",
+            text=f"🎉 *Your subscription is approved!*\n\n"
+                 f"✅ Access: *{label}*\n"
+                 f"📅 Duration: *{days} days*\n\n"
+                 f"Start practicing now! Send /start",
             parse_mode="Markdown")
     except Exception:
         pass
 
 
 async def reject_receipt(query, context, data):
-    parts       = data.replace("rcpt_no_", "").split("|")
+    # data format: rcpt_no_{payment_id}|{telegram_id}
+    rest    = data[len("rcpt_no_"):]
+    parts   = rest.split("|")
     if len(parts) < 2:
+        await query.edit_message_text("⚠️ Malformed receipt data.")
         return
-    payment_id  = int(parts[0])
+    payment_id  = parts[0]
     telegram_id = int(parts[1])
 
     async with aiosqlite.connect(DATABASE_PATH) as db:
+        row = await (await db.execute(
+            "SELECT status FROM payment_receipts WHERE id=?", (payment_id,))).fetchone()
+        if not row:
+            await query.edit_message_text("⚠️ Receipt not found.")
+            return
+        if row[0] != "pending":
+            await query.edit_message_text(f"ℹ️ Already {row[0]}.")
+            return
         await db.execute(
-            "UPDATE payments SET status='rejected', reviewed_by=? WHERE id=?",
-            (query.from_user.id, payment_id))
+            "UPDATE payment_receipts SET status='rejected', reviewed_at=datetime('now') WHERE id=?",
+            (payment_id,))
         await db.commit()
 
-    try:
-        await query.edit_message_caption("❌ *REJECTED.*", parse_mode="Markdown")
-    except Exception:
-        pass
+    await query.edit_message_text(
+        f"❌ *Receipt rejected.*\n\nUser `{telegram_id}` has been notified.",
+        parse_mode="Markdown",
+        reply_markup=admin_back_keyboard())
     try:
         await context.bot.send_message(
             chat_id=telegram_id,
-            text="❌ *Payment Not Approved*\n\n"
-            "Your payment receipt was not approved.\n\n"
-            "Please make sure you:\n"
-            "• Sent the correct amount\n"
-            "• Screenshot shows your name & transaction\n\n"
-            "Contact admin: @John_3_13 for help.",
+            text="❌ *Your payment receipt was rejected.*\n\n"
+                 "Please resend a clear screenshot of your bank transfer.\n"
+                 "Contact admin if you need help.",
             parse_mode="Markdown")
     except Exception:
         pass
 
-# ── Bulk Delete Menu ──────────────────────────────────────────────────────────
+
+# ─────────────────────── Bulk Delete main view ───────────────────────────────
 
 async def show_bulk_delete_menu(query):
-    """Show the main bulk delete options."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        total = (await (await db.execute("SELECT COUNT(*) FROM questions")).fetchone())[0]
-        cur = await db.execute(
-            "SELECT exam_type, COUNT(*) FROM questions GROUP BY exam_type ORDER BY exam_type")
+        total      = (await (await db.execute("SELECT COUNT(*) FROM questions")).fetchone())[0]
+        cur        = await db.execute("SELECT exam_type, COUNT(*) FROM questions GROUP BY exam_type ORDER BY exam_type")
         type_counts = {r[0]: r[1] for r in await cur.fetchall()}
-
-    type_lines = "\n".join(
-        f"  • {et.title()}: {cnt}" for et, cnt in type_counts.items()
-    ) if type_counts else "  (no questions)"
-
+    type_lines = "\n".join(f"  • {et.title()}: {cnt}" for et, cnt in type_counts.items()) or "  (no questions)"
     await query.edit_message_text(
         f"🗑️🗑️ *Bulk Delete Questions*\n\n"
-        f"Total questions in DB: *{total}*\n\n"
-        f"By type:\n{type_lines}\n\n"
+        f"Total questions: *{total}*\n\nBy type:\n{type_lines}\n\n"
         "Choose a delete option:",
         parse_mode="Markdown",
         reply_markup=bulk_delete_main_keyboard())
 
 
-# ── Referral Stats ────────────────────────────────────────────────────────────
+# ─────────────────────── Referral Stats ──────────────────────────────────────
 
 async def show_referral_stats(query, page: int = 0):
-    """Show referral leaderboard — who referred how many, and how many subscribed."""
     page_size = 10
-    offset = page * page_size
-
+    offset    = page * page_size
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        # Count how many people each user referred
         cur = await db.execute("""
             SELECT
-                u.telegram_id,
-                u.full_name,
-                u.username,
-                u.referral_code,
+                u.telegram_id, u.full_name, u.username,
                 u.referral_count,
-                COUNT(r.telegram_id) AS actual_referred,
+                COUNT(r.telegram_id)                            AS actual_referred,
                 SUM(CASE WHEN r.is_subscribed=1 THEN 1 ELSE 0 END) AS referred_subscribed
             FROM users u
             LEFT JOIN users r ON r.referred_by = u.referral_code
-            WHERE u.referral_count > 0 OR EXISTS (
-                SELECT 1 FROM users r2 WHERE r2.referred_by = u.referral_code
-            )
+            WHERE u.referral_count > 0
+               OR EXISTS (SELECT 1 FROM users r2 WHERE r2.referred_by = u.referral_code)
             GROUP BY u.telegram_id
             ORDER BY actual_referred DESC, referred_subscribed DESC
             LIMIT ? OFFSET ?
         """, (page_size + 1, offset))
         rows = [dict(r) for r in await cur.fetchall()]
 
-        # Total users + total subscribed
-        total_users = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
-        total_sub = (await (await db.execute(
-            "SELECT COUNT(*) FROM users WHERE is_subscribed=1")).fetchone())[0]
+        total_users     = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
+        total_sub       = (await (await db.execute("SELECT COUNT(*) FROM users WHERE is_subscribed=1")).fetchone())[0]
         total_referrers = (await (await db.execute(
             "SELECT COUNT(DISTINCT referred_by) FROM users WHERE referred_by IS NOT NULL")).fetchone())[0]
 
     has_more = len(rows) > page_size
-    rows = rows[:page_size]
+    rows     = rows[:page_size]
 
     if not rows:
         await query.edit_message_text(
             f"🔗 *Referral Stats*\n\n"
-            f"👥 Total users: *{total_users}*\n"
-            f"💎 Subscribed: *{total_sub}*\n\n"
+            f"👥 Total users: *{total_users}*  |  💎 Subscribed: *{total_sub}*\n\n"
             "No referrals recorded yet.",
             parse_mode="Markdown",
             reply_markup=admin_back_keyboard())
         return
 
     medals = ["🥇", "🥈", "🥉"]
-    lines = []
+    lines  = []
     for i, r in enumerate(rows):
-        rank = medals[i] if i < 3 else f"{offset + i + 1}."
-        name = (r.get("full_name") or r.get("username") or "Unknown")[:20]
-        referred = r.get("actual_referred") or 0
+        rank       = medals[i] if i < 3 else f"{offset + i + 1}."
+        name       = (r.get("full_name") or r.get("username") or "Unknown")[:20]
+        referred   = r.get("actual_referred") or 0
         subscribed = r.get("referred_subscribed") or 0
-        lines.append(
-            f"{rank} *{name}*\n"
-            f"   👥 Referred: {referred}  |  💎 Subscribed: {subscribed}"
-        )
+        lines.append(f"{rank} *{name}*\n   👥 Referred: {referred}  |  💎 Subscribed: {subscribed}")
 
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("◀️ Prev", callback_data=f"admin_ref_page_{page-1}"))
+        nav_buttons.append(InlineKeyboardButton("◀️ Prev", callback_data=f"admin_ref_page_{page - 1}"))
     if has_more:
-        nav_buttons.append(InlineKeyboardButton("Next ▶️", callback_data=f"admin_ref_page_{page+1}"))
+        nav_buttons.append(InlineKeyboardButton("Next ▶️", callback_data=f"admin_ref_page_{page + 1}"))
 
     keyboard = []
-    if nav_buttons:
-        keyboard.append(nav_buttons)
+    if nav_buttons: keyboard.append(nav_buttons)
     keyboard.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_back")])
 
     await query.edit_message_text(
