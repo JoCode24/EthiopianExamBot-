@@ -1,12 +1,10 @@
 """
-app/database/db.py  —  Database initialisation & migration
-Supports:
-- Fresh installs (creates all tables)
-- Existing DBs (safe ALTER TABLE for new columns — never crashes if already exists)
+app/database/db.py  —  Database initialisation & safe migration
 
-New columns added in this version:
-  users.streak_days      INTEGER DEFAULT 0
-  users.last_exam_date   TEXT
+Tables:
+  users, questions, subjects, departments, exam_sessions,
+  payment_receipts, admins, bank_accounts, giveaway_codes,
+  giveaway_redemptions, free_subject_usage, subscriptions
 """
 import aiosqlite
 from config import DATABASE_PATH
@@ -15,68 +13,68 @@ from app.utils.logger import logger
 
 async def init_db():
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        # ── Core user table ───────────────────────────────────────────────
+
+        # ── Users ─────────────────────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id         INTEGER UNIQUE NOT NULL,
-                username            TEXT,
-                full_name           TEXT,
-                is_subscribed       INTEGER DEFAULT 0,
-                subscription_expiry TEXT,
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id          INTEGER UNIQUE NOT NULL,
+                username             TEXT,
+                full_name            TEXT,
+                is_subscribed        INTEGER DEFAULT 0,
+                subscription_expiry  TEXT,
                 subscribed_exam_type TEXT,
-                subscribed_stream   TEXT,
-                subscribed_dept     TEXT,
-                referral_code       TEXT UNIQUE,
-                referred_by         TEXT,
-                referral_count      INTEGER DEFAULT 0,
-                total_exams         INTEGER DEFAULT 0,
-                best_score          INTEGER DEFAULT 0,
-                streak_days         INTEGER DEFAULT 0,
-                last_exam_date      TEXT,
-                created_at          TEXT DEFAULT (datetime('now'))
+                subscribed_stream    TEXT,
+                subscribed_dept      TEXT,
+                referral_code        TEXT UNIQUE,
+                referred_by          TEXT,
+                referral_count       INTEGER DEFAULT 0,
+                total_exams          INTEGER DEFAULT 0,
+                best_score           INTEGER DEFAULT 0,
+                streak_days          INTEGER DEFAULT 0,
+                last_exam_date       TEXT,
+                created_at           TEXT DEFAULT (datetime('now'))
             )
         """)
 
-        # ── Safe migrations: add columns that may be missing on existing DBs ──
-        _safe_migrations = [
-            ("users", "streak_days",    "INTEGER DEFAULT 0"),
-            ("users", "last_exam_date", "TEXT"),
-            # Keep subscription columns for older schemas
-            ("users", "is_subscribed",        "INTEGER DEFAULT 0"),
-            ("users", "subscription_expiry",  "TEXT"),
-            ("users", "subscribed_exam_type", "TEXT"),
-            ("users", "subscribed_stream",    "TEXT"),
-            ("users", "subscribed_dept",      "TEXT"),
-            ("users", "referral_code",        "TEXT"),
-            ("users", "referred_by",          "TEXT"),
-            ("users", "referral_count",       "INTEGER DEFAULT 0"),
-            ("users", "total_exams",          "INTEGER DEFAULT 0"),
-            ("users", "best_score",           "INTEGER DEFAULT 0"),
-        ]
-        for table, col, col_def in _safe_migrations:
+        # Safe column additions for existing databases
+        for col, defn in [
+            ("is_subscribed",        "INTEGER DEFAULT 0"),
+            ("subscription_expiry",  "TEXT"),
+            ("subscribed_exam_type", "TEXT"),
+            ("subscribed_stream",    "TEXT"),
+            ("subscribed_dept",      "TEXT"),
+            ("referral_code",        "TEXT"),
+            ("referred_by",          "TEXT"),
+            ("referral_count",       "INTEGER DEFAULT 0"),
+            ("total_exams",          "INTEGER DEFAULT 0"),
+            ("best_score",           "INTEGER DEFAULT 0"),
+            ("streak_days",          "INTEGER DEFAULT 0"),
+            ("last_exam_date",       "TEXT"),
+        ]:
             try:
-                await db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
+                await db.execute(f"ALTER TABLE users ADD COLUMN {col} {defn}")
             except Exception:
-                pass  # Column already exists — not an error
+                pass
 
         # ── Questions ─────────────────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS questions (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                exam_type   TEXT NOT NULL,
-                stream      TEXT,
-                dept        TEXT,
-                subject     TEXT,
-                year        INTEGER,
-                question    TEXT NOT NULL,
-                option_a    TEXT NOT NULL,
-                option_b    TEXT NOT NULL,
-                option_c    TEXT NOT NULL,
-                option_d    TEXT NOT NULL,
-                answer      TEXT NOT NULL,
-                explanation TEXT,
-                created_at  TEXT DEFAULT (datetime('now'))
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                exam_type      TEXT NOT NULL,
+                stream         TEXT,
+                dept           TEXT,
+                subject        TEXT,
+                year           INTEGER,
+                question_text  TEXT NOT NULL,
+                option_a       TEXT NOT NULL,
+                option_b       TEXT NOT NULL,
+                option_c       TEXT NOT NULL,
+                option_d       TEXT NOT NULL,
+                correct_answer TEXT NOT NULL,
+                explanation    TEXT,
+                reference      TEXT,
+                created_at     TEXT DEFAULT (datetime('now'))
             )
         """)
 
@@ -100,45 +98,49 @@ async def init_db():
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
                 dept_key  TEXT UNIQUE NOT NULL,
                 dept_name TEXT NOT NULL,
+                exam_type TEXT,
                 emoji     TEXT DEFAULT '🏛️'
             )
         """)
+        try:
+            await db.execute("ALTER TABLE departments ADD COLUMN exam_type TEXT")
+        except Exception:
+            pass
 
         # ── Exam sessions ─────────────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS exam_sessions (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id   INTEGER NOT NULL,
-                exam_type     TEXT NOT NULL,
-                stream        TEXT,
-                dept          TEXT,
-                subject       TEXT,
-                year          INTEGER,
-                score         INTEGER DEFAULT 0,
-                total         INTEGER DEFAULT 0,
-                pct           REAL    DEFAULT 0,
-                completed     INTEGER DEFAULT 0,
-                started_at    TEXT DEFAULT (datetime('now')),
-                finished_at   TEXT
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                exam_type   TEXT NOT NULL,
+                stream      TEXT,
+                dept        TEXT,
+                subject     TEXT,
+                year        INTEGER,
+                score       INTEGER DEFAULT 0,
+                total       INTEGER DEFAULT 0,
+                pct         REAL    DEFAULT 0,
+                completed   INTEGER DEFAULT 0,
+                started_at  TEXT DEFAULT (datetime('now')),
+                finished_at TEXT
             )
         """)
-        # Safe migrations for exam_sessions
-        for col, col_def in [("pct", "REAL DEFAULT 0"), ("finished_at", "TEXT")]:
+        for col, defn in [("pct", "REAL DEFAULT 0"), ("finished_at", "TEXT")]:
             try:
-                await db.execute(f"ALTER TABLE exam_sessions ADD COLUMN {col} {col_def}")
+                await db.execute(f"ALTER TABLE exam_sessions ADD COLUMN {col} {defn}")
             except Exception:
                 pass
 
         # ── Payment receipts ──────────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS payment_receipts (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER NOT NULL,
-                exam_type   TEXT,
-                stream      TEXT,
-                dept        TEXT,
-                file_id     TEXT,
-                status      TEXT DEFAULT 'pending',
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id  INTEGER NOT NULL,
+                exam_type    TEXT,
+                stream       TEXT,
+                dept         TEXT,
+                file_id      TEXT,
+                status       TEXT DEFAULT 'pending',
                 submitted_at TEXT DEFAULT (datetime('now')),
                 reviewed_at  TEXT
             )
@@ -154,31 +156,53 @@ async def init_db():
             )
         """)
 
-        # ── Bank accounts ─────────────────────────────────────────────────
+        # admin_users alias (some parts of code use this name)
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS bank_accounts (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                bank_name    TEXT NOT NULL,
-                account_no   TEXT NOT NULL,
-                account_name TEXT,
-                is_active    INTEGER DEFAULT 1
+            CREATE TABLE IF NOT EXISTS admin_users (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER UNIQUE NOT NULL,
+                full_name   TEXT,
+                role        TEXT DEFAULT 'sub',
+                added_by    INTEGER,
+                added_at    TEXT DEFAULT (datetime('now'))
             )
         """)
 
-        # ── Giveaway / promo codes ────────────────────────────────────────
+        # ── Bank accounts ─────────────────────────────────────────────────
+        # Uses account_number + account_holder (subscription.py expects these names)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bank_accounts (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                bank_name      TEXT NOT NULL,
+                account_number TEXT NOT NULL,
+                account_holder TEXT,
+                is_active      INTEGER DEFAULT 1
+            )
+        """)
+        for col, defn in [
+            ("account_number", "TEXT"),
+            ("account_holder", "TEXT"),
+            ("is_active",      "INTEGER DEFAULT 1"),
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE bank_accounts ADD COLUMN {col} {defn}")
+            except Exception:
+                pass
+
+        # ── Giveaway codes ────────────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS giveaway_codes (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                code         TEXT UNIQUE NOT NULL,
-                exam_type    TEXT,
-                stream       TEXT,
-                dept         TEXT,
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                code          TEXT UNIQUE NOT NULL,
+                exam_type     TEXT,
+                stream        TEXT,
+                dept          TEXT,
                 duration_days INTEGER DEFAULT 30,
-                max_uses     INTEGER DEFAULT 1,
-                used_count   INTEGER DEFAULT 0,
-                created_by   INTEGER,
-                created_at   TEXT DEFAULT (datetime('now')),
-                expires_at   TEXT
+                max_uses      INTEGER DEFAULT 1,
+                used_count    INTEGER DEFAULT 0,
+                created_by    INTEGER,
+                created_at    TEXT DEFAULT (datetime('now')),
+                expires_at    TEXT
             )
         """)
 
@@ -193,7 +217,7 @@ async def init_db():
             )
         """)
 
-        # ── Free subject usage (for free-tier limits per subject) ─────────
+        # ── Free subject usage ────────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS free_subject_usage (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -205,11 +229,27 @@ async def init_db():
             )
         """)
 
-        # ── Useful indexes ────────────────────────────────────────────────
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_questions_type   ON questions(exam_type)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_questions_subject ON questions(subject)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_tid      ON exam_sessions(telegram_id)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_receipts_status   ON payment_receipts(status)")
+        # ── Multi-subscriptions ───────────────────────────────────────────
+        # One row per exam_type/stream/dept — users can hold multiple at once
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id   INTEGER NOT NULL,
+                exam_type     TEXT NOT NULL,
+                stream        TEXT,
+                dept          TEXT,
+                subscribed_at TEXT DEFAULT (datetime('now')),
+                expiry_at     TEXT,
+                is_active     INTEGER DEFAULT 1
+            )
+        """)
+
+        # ── Indexes ───────────────────────────────────────────────────────
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_q_type    ON questions(exam_type)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_q_subject ON questions(subject)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ses_tid   ON exam_sessions(telegram_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_rcpt_stat ON payment_receipts(status)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_sub_tid   ON subscriptions(telegram_id)")
 
         await db.commit()
         logger.info("Database initialised / migrated successfully.")
