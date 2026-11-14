@@ -1,9 +1,10 @@
 """
-main.py  —  EthiopianExamBot entry point
+main.py  —  EthiopianExamBot entry point (Updated with backup + user-feature handlers)
 
 Handler registration order matters:
-- More-specific patterns first (admin_upload before admin_button)
-- stream| and dept| patterns use pipe, not underscore
+- More-specific patterns FIRST (admin_upload before admin_button)
+- bkp_ callbacks routed through admin_button_handler (lazy-imported internally)
+- user_my_stats / user_badges / user_progress handled before catch-all button_handler
 """
 from telegram.ext import (
     ApplicationBuilder, CommandHandler,
@@ -44,7 +45,17 @@ from app.handlers.subscription import (
     send_receipt_handler,
     receipt_photo_handler,
 )
-from app.handlers.user_features import redeem_command, referral_command
+from app.handlers.user_features import (
+    redeem_command,
+    referral_command,
+    mystats_command,
+    badges_command,
+    streak_command,
+    progress_command,
+    user_stats_callback,
+    user_badges_callback,
+    user_progress_callback,
+)
 from app.handlers.mock_exam import (
     mock_menu_handler,
     mock_subject_handler,
@@ -71,6 +82,11 @@ def main():
     app.add_handler(CommandHandler("admin",    admin_command))
     app.add_handler(CommandHandler("redeem",   redeem_command))
     app.add_handler(CommandHandler("referral", referral_command))
+    # New user-feature commands
+    app.add_handler(CommandHandler("mystats",  mystats_command))
+    app.add_handler(CommandHandler("badges",   badges_command))
+    app.add_handler(CommandHandler("streak",   streak_command))
+    app.add_handler(CommandHandler("progress", progress_command))
 
     # ── Admin upload (before admin_button to avoid overlap) ───────────────
     app.add_handler(CallbackQueryHandler(
@@ -78,11 +94,17 @@ def main():
         pattern=r"^(aq_type_|aq_stream_|aq_mock_stream_|aq_mock_dept_|upload_subject_|aq_confirm_save|aq_dept_)",
     ))
 
-    # ── Admin panel ───────────────────────────────────────────────────────
+    # ── Admin panel + backup callbacks ────────────────────────────────────
+    # bkp_ callbacks are routed inside admin_button_handler via lazy import
     app.add_handler(CallbackQueryHandler(
         admin_button_handler,
-        pattern=r"^(admin_|aq_subject_|edit_q_field_|rcpt_ok_|rcpt_no_|vq_|bd_)",
+        pattern=r"^(admin_|aq_subject_|edit_q_field_|rcpt_ok_|rcpt_no_|vq_|bd_|bkp_)",
     ))
+
+    # ── User feature callbacks ────────────────────────────────────────────
+    app.add_handler(CallbackQueryHandler(user_stats_callback,    pattern=r"^user_my_stats$"))
+    app.add_handler(CallbackQueryHandler(user_badges_callback,   pattern=r"^user_badges$"))
+    app.add_handler(CallbackQueryHandler(user_progress_callback, pattern=r"^user_progress$"))
 
     # ── Subscription flow ─────────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(subscribe_handler,       pattern=r"^subscribe$"))
@@ -122,8 +144,9 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
 
     # ── Messages ──────────────────────────────────────────────────────────
-    app.add_handler(MessageHandler(filters.PHOTO,                   receipt_photo_handler))
-    app.add_handler(MessageHandler(filters.Document.TXT,            admin_file_handler))
+    app.add_handler(MessageHandler(filters.PHOTO, receipt_photo_handler))
+    # Accept ALL document types: .txt for question uploads, .json/.zip for backup restore
+    app.add_handler(MessageHandler(filters.Document.ALL, admin_file_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_text_handler))
 
     logger.info("Handlers registered. Polling...")
