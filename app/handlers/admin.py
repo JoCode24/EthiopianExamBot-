@@ -106,6 +106,30 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         et        = rest[:first_sep]
         dk        = rest[first_sep + 1:]
         await show_questions_list(query, et, dk)
+    elif data.startswith("vq_bysubj_"):
+        exam_type = data.replace("vq_bysubj_", "")
+        await show_questions_by_subject(query, exam_type)
+    elif data.startswith("vq_subj_"):
+        # vq_subj_{exam_type}|{subject}
+        rest  = data.replace("vq_subj_", "")
+        if "|" in rest:
+            et, subj = rest.split("|", 1)
+            await show_questions_list_by_subject(query, et, subj)
+        else:
+            await query.edit_message_text("⚠️ Invalid subject data.", reply_markup=admin_back_keyboard())
+    elif data.startswith("vq_subjpage_"):
+        # vq_subjpage_{exam_type}|{subject}|{offset}
+        rest  = data.replace("vq_subjpage_", "")
+        parts = rest.rsplit("|", 1)
+        if len(parts) == 2:
+            try:    offset = int(parts[1])
+            except ValueError: offset = 0
+            inner = parts[0]
+            if "|" in inner:
+                et, subj = inner.split("|", 1)
+                await show_questions_list_by_subject(query, et, subj, offset)
+            else:
+                await query.edit_message_text("⚠️ Invalid page data.", reply_markup=admin_back_keyboard())
     elif data.startswith("vq_page_"):
         rest  = data.replace("vq_page_", "")
         parts = rest.rsplit("_", 1)
@@ -1343,27 +1367,61 @@ async def show_questions_by_type(query, exam_type):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         if exam_type in ("entrance", "remedial"):
+            # Group by stream first
             cur  = await db.execute(
-                "SELECT stream, COUNT(*) FROM questions WHERE exam_type=? GROUP BY stream", (exam_type,))
+                "SELECT stream, COUNT(*) FROM questions WHERE exam_type=? GROUP BY stream ORDER BY stream",
+                (exam_type,))
             rows = await cur.fetchall()
-            buttons = [[InlineKeyboardButton(
-                f"{'🔬' if s == 'natural' else '📚'} {s.title()} ({c})",
-                callback_data=f"vq_stream_{exam_type}_{s}"
-            )] for s, c in rows]
+            buttons = []
+            for s, c in rows:
+                icon = "🔬" if s == "natural" else "📚"
+                buttons.append([InlineKeyboardButton(
+                    f"{icon} {(s or 'unknown').title()} ({c})",
+                    callback_data=f"vq_stream_{exam_type}_{s}")])
         elif exam_type in ("exit", "coc"):
+            # Group by dept (stored in stream column)
             cur  = await db.execute(
-                "SELECT stream, COUNT(*) FROM questions WHERE exam_type=? GROUP BY stream", (exam_type,))
+                "SELECT stream, COUNT(*) FROM questions WHERE exam_type=? GROUP BY stream ORDER BY stream",
+                (exam_type,))
             rows = await cur.fetchall()
-            buttons = [[InlineKeyboardButton(
-                f"🏛️ {s.replace('_',' ').title()} ({c})",
-                callback_data=f"vq_dept_{exam_type}_{s}"
-            )] for s, c in rows]
+            buttons = []
+            for s, c in rows:
+                buttons.append([InlineKeyboardButton(
+                    f"🏛️ {(s or 'unknown').replace('_',' ').title()} ({c})",
+                    callback_data=f"vq_dept_{exam_type}_{s}")])
         else:
-            await show_questions_list(query, exam_type, "general")
-            return
+            # driving / mock — group by subject
+            cur  = await db.execute(
+                "SELECT subject, COUNT(*) FROM questions WHERE exam_type=? GROUP BY subject ORDER BY subject",
+                (exam_type,))
+            rows = await cur.fetchall()
+            if not rows:
+                await show_questions_list(query, exam_type, "general")
+                return
+            buttons = []
+            for s, c in rows:
+                label = (s or "general").replace("_", " ").title()
+                buttons.append([InlineKeyboardButton(
+                    f"📘 {label} ({c})",
+                    callback_data=f"vq_stream_{exam_type}_{s or 'general'}")])
+
+    if not buttons:
+        await query.edit_message_text(
+            f"❓ No questions found for *{exam_type.title()}*.",
+            parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        return
+
+    # Also add "Browse by Subject" option for all types
+    buttons.append([InlineKeyboardButton(
+        "📋 Browse by Subject", callback_data=f"vq_bysubj_{exam_type}")])
     buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_view_questions")])
+
+    label_map = {"entrance": "Stream", "remedial": "Stream",
+                 "exit": "Department", "coc": "Department"}
+    group_label = label_map.get(exam_type, "Stream / Subject")
+
     await query.edit_message_text(
-        f"📂 *{exam_type.title()} Exam* — choose stream/dept:",
+        f"📂 *{exam_type.title()} Exam* — choose {group_label}:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -1395,6 +1453,72 @@ async def show_questions_list(query, exam_type, stream, offset=0, page_size=10):
     keyboard = []
     if nav: keyboard.append(nav)
     keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"vq_type_{exam_type}")])
+    await query.edit_message_text(
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def show_questions_by_subject(query, exam_type):
+    """List all subjects for an exam type so admin can drill into each."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute(
+            "SELECT subject, COUNT(*) FROM questions WHERE exam_type=? "
+            "GROUP BY subject ORDER BY subject",
+            (exam_type,))
+        rows = await cur.fetchall()
+    if not rows:
+        await query.edit_message_text(
+            f"❓ No questions found for *{exam_type.title()}*.",
+            parse_mode="Markdown", reply_markup=admin_back_keyboard())
+        return
+    buttons = []
+    for subj, cnt in rows:
+        label = (subj or "general").replace("_", " ").title()
+        buttons.append([InlineKeyboardButton(
+            f"📘 {label} ({cnt})",
+            callback_data=f"vq_subj_{exam_type}|{subj or 'general'}")])
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"vq_type_{exam_type}")])
+    await query.edit_message_text(
+        f"📚 *{exam_type.title()}* — Browse by Subject:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def show_questions_list_by_subject(query, exam_type, subject, offset=0, page_size=10):
+    """Show paginated question list filtered by exam_type + subject."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        subj_filter = None if subject == "general" else subject
+        total = (await (await db.execute(
+            "SELECT COUNT(*) FROM questions WHERE exam_type=? AND (subject=? OR (? IS NULL AND subject IS NULL))",
+            (exam_type, subj_filter, subj_filter))).fetchone())[0]
+        cur = await db.execute(
+            "SELECT id, question_text, correct_answer, year, stream FROM questions "
+            "WHERE exam_type=? AND (subject=? OR (? IS NULL AND subject IS NULL)) "
+            "ORDER BY id LIMIT ? OFFSET ?",
+            (exam_type, subj_filter, subj_filter, page_size, offset))
+        rows = [dict(r) for r in await cur.fetchall()]
+    if not rows:
+        await query.edit_message_text("No questions found.", reply_markup=admin_back_keyboard())
+        return
+    subj_label = subject.replace("_", " ").title()
+    lines = [f"📋 *{exam_type.title()} / {subj_label}* — {total} total\n"]
+    for r in rows:
+        qt = (r["question_text"] or "")[:50].replace("*", "").replace("_", "")
+        yr = f" [{r['year']}]" if r.get("year") else ""
+        st = f" ({r['stream']})" if r.get("stream") else ""
+        lines.append(f"`ID:{r['id']}`{yr}{st} ✅{r['correct_answer']} — {qt}…")
+    nav = []
+    if offset > 0:
+        nav.append(InlineKeyboardButton(
+            "◀️ Prev", callback_data=f"vq_subjpage_{exam_type}|{subject}|{offset - page_size}"))
+    if offset + page_size < total:
+        nav.append(InlineKeyboardButton(
+            "Next ▶️", callback_data=f"vq_subjpage_{exam_type}|{subject}|{offset + page_size}"))
+    keyboard = []
+    if nav: keyboard.append(nav)
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"vq_bysubj_{exam_type}")])
     await query.edit_message_text(
         "\n".join(lines),
         parse_mode="Markdown",
@@ -1606,16 +1730,28 @@ async def approve_receipt(query, context, data):
     if stream: label += " / " + stream.title()
     if dept:   label += " / " + dept.replace("_", " ").title()
 
-    await query.edit_message_text(
-        f"✅ *Approved!*\n\nUser `{telegram_id}` subscribed to: *{label}*",
-        parse_mode="Markdown",
-        reply_markup=admin_back_keyboard())
+    # Receipt messages are photos — must use edit_message_caption, not edit_message_text
+    try:
+        await query.edit_message_caption(
+            f"✅ *Approved!*\n\nUser `{telegram_id}` subscribed to: *{label}*",
+            parse_mode="Markdown",
+            reply_markup=admin_back_keyboard())
+    except Exception:
+        # Fallback for text messages (e.g. no-photo fallback receipt)
+        try:
+            await query.edit_message_text(
+                f"✅ *Approved!*\n\nUser `{telegram_id}` subscribed to: *{label}*",
+                parse_mode="Markdown",
+                reply_markup=admin_back_keyboard())
+        except Exception:
+            pass
+
     try:
         await context.bot.send_message(
             chat_id=telegram_id,
             text=f"🎉 *Your subscription is approved!*\n\n"
                  f"✅ Access: *{label}*\n"
-                 f"📅 Duration: *{days} days*\n\n"
+                 f"📅 Duration: *30 days*\n\n"
                  f"Start practicing now! Send /start",
             parse_mode="Markdown")
     except Exception:
@@ -1646,10 +1782,21 @@ async def reject_receipt(query, context, data):
             (payment_id,))
         await db.commit()
 
-    await query.edit_message_text(
-        f"❌ *Receipt rejected.*\n\nUser `{telegram_id}` has been notified.",
-        parse_mode="Markdown",
-        reply_markup=admin_back_keyboard())
+    # Receipt messages are photos — must use edit_message_caption, not edit_message_text
+    try:
+        await query.edit_message_caption(
+            f"❌ *Receipt rejected.*\n\nUser `{telegram_id}` has been notified.",
+            parse_mode="Markdown",
+            reply_markup=admin_back_keyboard())
+    except Exception:
+        try:
+            await query.edit_message_text(
+                f"❌ *Receipt rejected.*\n\nUser `{telegram_id}` has been notified.",
+                parse_mode="Markdown",
+                reply_markup=admin_back_keyboard())
+        except Exception:
+            pass
+
     try:
         await context.bot.send_message(
             chat_id=telegram_id,
