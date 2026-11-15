@@ -19,6 +19,7 @@ from app.handlers.start import (
 )
 from app.handlers.exam import (
     direct_subject_handler,
+    examyear_handler,
     start_exam_handler,
     answer_handler,
     next_question_handler,
@@ -124,6 +125,7 @@ def main():
 
     # ── Direct exam flow ──────────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(direct_subject_handler, pattern=r"^direct_subject_"))
+    app.add_handler(CallbackQueryHandler(examyear_handler,       pattern=r"^examyear_"))
     app.add_handler(CallbackQueryHandler(start_exam_handler,     pattern=r"^start_exam_"))
     app.add_handler(CallbackQueryHandler(answer_handler,         pattern=r"^answer_"))
     app.add_handler(CallbackQueryHandler(next_question_handler,  pattern=r"^next_question$"))
