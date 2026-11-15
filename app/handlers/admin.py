@@ -777,6 +777,29 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             await query.edit_message_text("📚 Choose subject:", reply_markup=build_subject_keyboard(subjects))
 
+    elif data.startswith("aq_dept_"):
+        # Department selected during UPLOAD flow (exit / coc)
+        dept      = data.replace("aq_dept_", "")
+        exam_type = context.user_data.get("upload_exam_type", "exit")
+        context.user_data["upload_stream"] = dept
+        subjects  = await get_subjects(exam_type, dept)
+        if subjects:
+            await query.edit_message_text(
+                "📋 Choose subject for " + dept.replace("_", " ").title() + ":",
+                reply_markup=build_subject_keyboard(subjects, prefix="upload_subject_"))
+        else:
+            # No subjects — dept itself is the subject; ask year next
+            context.user_data["upload_subject"] = dept
+            parsed = context.user_data.get("parsed_questions", [])
+            context.user_data["waiting_for"] = "upload_year"
+            await query.edit_message_text(
+                "📅 *የፈተና ዓመት ያስገቡ* (" + str(len(parsed)) + " ጥያቄዎች)\n\n"
+                "ምሳሌ: `2015`, `2016`, `2017`\n"
+                "ዓመቱ ካልታወቀ `skip` ብለው ያስገቡ\n\n"
+                "ክፍል: *" + dept.replace("_", " ").title() + "*\n"
+                "ፈተና: *" + exam_type.title() + "*",
+                parse_mode="Markdown")
+
     elif data.startswith("upload_subject_"):
         subject   = data.replace("upload_subject_", "")
         context.user_data["upload_subject"] = subject
