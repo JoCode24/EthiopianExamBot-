@@ -74,9 +74,15 @@ async def init_db():
                 correct_answer TEXT NOT NULL,
                 explanation    TEXT,
                 reference      TEXT,
+                exam_month     TEXT,
                 created_at     TEXT DEFAULT (datetime('now'))
             )
         """)
+        # Safe migration for existing databases
+        try:
+            await db.execute("ALTER TABLE questions ADD COLUMN exam_month TEXT")
+        except Exception:
+            pass
 
         # ── Subjects ──────────────────────────────────────────────────────
         await db.execute("""
