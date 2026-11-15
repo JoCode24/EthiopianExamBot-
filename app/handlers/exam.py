@@ -270,32 +270,24 @@ async def examyear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start_exam_handler(update, context)
 
 
-async def start_exam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Starts the exam.
-    Callback: start_exam_<exam_type>|<stream_or_dept>|<subject_key>|<year>
-           or: start_exam_<exam_type>|<stream_or_dept>|<subject_key>|<year>|<month>
+async def _do_start_exam(query, context: ContextTypes.DEFAULT_TYPE,
+                         exam_type: str, stream_or_dept: str,
+                         subject_key: str, year_str: str, month: str = None):
     """
-    query = update.callback_query
-    await query.answer()
+    Core exam-start logic, called by both start_exam_handler and examyear_handler.
+    query      — the CallbackQuery object (already answered)
+    year_str   — "0" means random mix, otherwise a year integer as string
+    month      — optional Amharic month name (for exit/coc)
+    """
     tid = query.from_user.id
-
-    raw = query.data.replace("start_exam_", "")
-    parts = raw.split("|")
-    if len(parts) < 4:
-        await query.edit_message_text("⚠️ Invalid exam selection.")
-        return
-
-    exam_type, stream_or_dept, subject_key, year_str = parts[0], parts[1], parts[2], parts[3]
-    month = parts[4] if len(parts) >= 5 else None   # optional Amharic month
-    year  = int(year_str) if year_str and year_str != "0" else None
     stream_or_dept = stream_or_dept or ""
+    year = int(year_str) if year_str and year_str not in ("0", "", "None") else None
 
     user = await get_user(tid)
     if not user:
         await query.edit_message_text("Please start the bot first with /start")
         return
 
-    # Determine stream vs dept
     stream_val = stream_or_dept if exam_type in ("entrance", "remedial") else None
     dept_val   = stream_or_dept if exam_type in ("exit", "coc") else None
 
@@ -303,9 +295,9 @@ async def start_exam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     can_free, used = await can_do_free_for_subject(tid, subject_key)
 
     if full_access:
-        max_q = 0  # 0 = no cap, return all available questions
+        max_q = 0
     elif can_free:
-        max_q = FREE_QUESTIONS_PER_SUBJECT - used  # Only remaining free questions
+        max_q = FREE_QUESTIONS_PER_SUBJECT - used
     else:
         await _show_paywall(query, FREE_QUESTIONS_PER_SUBJECT)
         return
@@ -329,21 +321,44 @@ async def start_exam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         tid, exam_type, stream_or_dept, subject_key, year, len(questions))
 
     context.user_data["exam"] = {
-        "questions": questions,
-        "current": 0,
-        "score": 0,
-        "session_id": session_id,
-        "exam_type": exam_type,
+        "questions":     questions,
+        "current":       0,
+        "score":         0,
+        "session_id":    session_id,
+        "exam_type":     exam_type,
         "stream_or_dept": stream_or_dept,
-        "stream_val": stream_val,
-        "dept_val": dept_val,
-        "subject_key": subject_key,
-        "year": year,
-        "month": month,
-        "full_access": full_access,
+        "stream_val":    stream_val,
+        "dept_val":      dept_val,
+        "subject_key":   subject_key,
+        "year":          year,
+        "month":         month,
+        "full_access":   full_access,
     }
 
     await _send_question(query, context)
+
+
+async def start_exam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Starts the exam.
+    Callback: start_exam_<exam_type>|<stream_or_dept>|<subject_key>|<year>
+           or: start_exam_<exam_type>|<stream_or_dept>|<subject_key>|<year>|<month>
+    """
+    query = update.callback_query
+    await query.answer()
+
+    raw = query.data.replace("start_exam_", "")
+    parts = raw.split("|")
+    if len(parts) < 4:
+        await query.edit_message_text("⚠️ Invalid exam selection.")
+        return
+
+    exam_type      = parts[0]
+    stream_or_dept = parts[1]
+    subject_key    = parts[2]
+    year_str       = parts[3]
+    month          = parts[4] if len(parts) >= 5 else None
+
+    await _do_start_exam(query, context, exam_type, stream_or_dept, subject_key, year_str, month)
 
 
 async def _send_question(query, context: ContextTypes.DEFAULT_TYPE):
