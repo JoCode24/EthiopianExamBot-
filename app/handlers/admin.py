@@ -479,13 +479,17 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     "📋 Choose subject for " + dept.replace("_", " ").title() + ":",
                     reply_markup=build_subject_keyboard(subjects, prefix="upload_subject_"))
             else:
+                # No subjects — dept itself is the subject; ask year next
                 context.user_data["upload_subject"] = dept
                 parsed = context.user_data.get("parsed_questions", [])
+                context.user_data["waiting_for"] = "upload_year"
                 await query.edit_message_text(
-                    "✅ Ready to save " + str(len(parsed)) + " questions\n"
-                    "Department: " + dept.replace("_", " ").title() + "\n"
-                    "Exam: " + exam_type.title() + "\n\nConfirm?",
-                    reply_markup=admin_confirm_keyboard())
+                    "📅 *የፈተና ዓመት ያስገቡ* (" + str(len(parsed)) + " ጥያቄዎች)\n\n"
+                    "ምሳሌ: `2015`, `2016`, `2017`\n"
+                    "ዓመቱ ካልታወቀ `skip` ብለው ያስገቡ\n\n"
+                    "ክፍል: *" + dept.replace("_", " ").title() + "*\n"
+                    "ፈተና: *" + exam_type.title() + "*",
+                    parse_mode="Markdown")
         else:
             context.user_data["aq_stream"]        = dept
             context.user_data["aq_subject"]       = dept
@@ -658,10 +662,15 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             if has_upload:
                 context.user_data["upload_subject"] = dept_key
                 parsed = context.user_data.get("parsed_questions", [])
+                # Ask year before confirm
+                context.user_data["waiting_for"] = "upload_year"
                 await query.edit_message_text(
-                    f"✅ Ready to save *{len(parsed)} questions*\n\n"
-                    f"📋 Department: *{dept_label}*\n📚 Exam: Mock\n\nConfirm?",
-                    parse_mode="Markdown", reply_markup=admin_confirm_keyboard())
+                    "📅 *የፈተና ዓመት ያስገቡ* (" + str(len(parsed)) + " ጥያቄዎች)\n\n"
+                    "ምሳሌ: `2015`, `2016`, `2017`\n"
+                    "ዓመቱ ካልታወቀ `skip` ብለው ያስገቡ\n\n"
+                    "ክፍል: *" + dept_label + "*\n"
+                    "ፈተና: Mock",
+                    parse_mode="Markdown")
             else:
                 context.user_data["aq_subject"]       = dept_key
                 context.user_data["aq_subject_label"] = dept_label
@@ -712,14 +721,14 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         parsed    = context.user_data.get("parsed_questions", [])
         exam_type = context.user_data.get("upload_exam_type", "entrance")
         stream    = context.user_data.get("upload_stream", "natural")
-        # Ask for year before confirming
+        # Ask for year first
         context.user_data["waiting_for"] = "upload_year"
         await query.edit_message_text(
-            "📅 *Enter the exam year for these " + str(len(parsed)) + " questions*\n\n"
-            "Examples: `2015`, `2016`, `2017` (Ethiopian Calendar)\n"
-            "Or type `skip` to save without a year.\n\n"
-            "Subject: *" + subject.replace("_", " ").title() + "*\n"
-            "Exam: *" + exam_type.title() + " / " + stream + "*",
+            "📅 *የፈተና ዓመት ያስገቡ* (" + str(len(parsed)) + " ጥያቄዎች)\n\n"
+            "ምሳሌ: `2015`, `2016`, `2017` (የኢትዮጵያ አቆጣጠር)\n"
+            "ዓመቱ ካልታወቀ `skip` ብለው ያስገቡ\n\n"
+            "ትምህርት: *" + subject.replace("_", " ").title() + "*\n"
+            "ፈተና: *" + exam_type.title() + " / " + stream + "*",
             parse_mode="Markdown"
         )
 
@@ -792,30 +801,68 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 yr = int(text)
                 if not (1900 <= yr <= 2100):
                     await update.message.reply_text(
-                        "⚠️ Please enter a valid year (e.g. `2015`) or type `skip`.",
+                        "⚠️ ትክክለኛ ዓመት ያስገቡ (ለምሳሌ `2015`) ወይም `skip` ብለው ያስገቡ።",
                         parse_mode="Markdown")
                     return
                 context.user_data["upload_year"] = yr
             except ValueError:
                 await update.message.reply_text(
-                    "⚠️ Not a valid year. Enter a number like `2016` or type `skip`.",
+                    "⚠️ ቁጥር ያስገቡ (ለምሳሌ `2016`) ወይም `skip` ብለው ያስገቡ።",
                     parse_mode="Markdown")
                 return
-        context.user_data["waiting_for"] = None
-        # Show confirmation
-        parsed    = context.user_data.get("parsed_questions", [])
+
         exam_type = context.user_data.get("upload_exam_type", "entrance")
-        stream    = context.user_data.get("upload_stream", "natural")
-        subject   = context.user_data.get("upload_subject", "")
-        yr_label  = str(context.user_data.get("upload_year") or "No year")
+
+        # For exit/coc — ask month (optional) since they occur 2–3 times/year
+        if exam_type in ("exit", "coc"):
+            context.user_data["waiting_for"] = "upload_month"
+            await update.message.reply_text(
+                "📆 *የፈተና ወር ያስገቡ* (አማራጭ)\n\n"
+                "ምሳሌ: `ጥር`, `የካቲት`, `መጋቢት`, `ሚያዚያ`, `ግንቦት`, `ሰኔ`,\n"
+                "`ሐምሌ`, `ነሐሴ`, `መስከረም`, `ጥቅምት`, `ህዳር`, `ታህሳስ`\n\n"
+                "ወሩ ካልታወቀ `skip` ብለው ያስገቡ።",
+                parse_mode="Markdown")
+            return
+
+        # Other exam types — go straight to confirm
+        context.user_data["waiting_for"] = None
+        parsed   = context.user_data.get("parsed_questions", [])
+        stream   = context.user_data.get("upload_stream", "")
+        subject  = context.user_data.get("upload_subject", "")
+        yr_label = str(context.user_data.get("upload_year") or "ዓመት የለም")
         await update.message.reply_text(
-            "✅ *Ready to save!*\n\n"
-            "Questions: *" + str(len(parsed)) + "*\n"
-            "Exam: *" + exam_type.title() + "*\n"
-            "Stream / Dept: *" + stream + "*\n"
-            "Subject: *" + subject.replace("_", " ").title() + "*\n"
-            "Year: *" + yr_label + "*\n\n"
-            "Confirm save?",
+            "✅ *ለማስቀመጥ ዝግጁ ነው!*\n\n"
+            "ጥያቄዎች: *" + str(len(parsed)) + "*\n"
+            "ፈተና: *" + exam_type.title() + "*\n"
+            "ዥረት / ክፍል: *" + stream + "*\n"
+            "ትምህርት: *" + subject.replace("_", " ").title() + "*\n"
+            "ዓመት: *" + yr_label + "*\n\n"
+            "ያረጋግጡ?",
+            parse_mode="Markdown",
+            reply_markup=admin_confirm_keyboard())
+
+    elif waiting == "upload_month":
+        # Month for exit/coc upload (optional)
+        if text.lower() == "skip":
+            context.user_data["upload_month"] = None
+        else:
+            context.user_data["upload_month"] = text.strip()
+        context.user_data["waiting_for"] = None
+        parsed    = context.user_data.get("parsed_questions", [])
+        exam_type = context.user_data.get("upload_exam_type", "exit")
+        stream    = context.user_data.get("upload_stream", "")
+        subject   = context.user_data.get("upload_subject", "")
+        yr_label  = str(context.user_data.get("upload_year") or "ዓመት የለም")
+        mo_label  = context.user_data.get("upload_month") or "ወር የለም"
+        await update.message.reply_text(
+            "✅ *ለማስቀመጥ ዝግጁ ነው!*\n\n"
+            "ጥያቄዎች: *" + str(len(parsed)) + "*\n"
+            "ፈተና: *" + exam_type.title() + "*\n"
+            "ክፍል: *" + stream + "*\n"
+            "ትምህርት: *" + subject.replace("_", " ").title() + "*\n"
+            "ዓመት: *" + yr_label + "*\n"
+            "ወር: *" + mo_label + "*\n\n"
+            "ያረጋግጡ?",
             parse_mode="Markdown",
             reply_markup=admin_confirm_keyboard())
 
@@ -1284,7 +1331,8 @@ async def save_bulk_questions(query, context):
     exam_type = context.user_data.get("upload_exam_type", "entrance")
     stream    = context.user_data.get("upload_stream", "natural")
     subject   = context.user_data.get("upload_subject", "")
-    year      = context.user_data.get("upload_year")  # int or None — set by upload_year handler
+    year      = context.user_data.get("upload_year")   # int or None
+    month     = context.user_data.get("upload_month")  # Amharic month string or None
 
     if not parsed:
         await query.edit_message_text("⚠️ No questions to save. Start upload again.", reply_markup=admin_back_keyboard())
@@ -1298,28 +1346,31 @@ async def save_bulk_questions(query, context):
                 await db.execute(
                     "INSERT INTO questions "
                     "(exam_type,stream,subject,question_text,option_a,option_b,option_c,option_d,"
-                    "correct_answer,explanation,reference,year) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "correct_answer,explanation,reference,year,exam_month) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (exam_type, stream, subject or q.get("subject", ""),
                      q["question_text"], q["option_a"], q["option_b"],
                      q["option_c"], q["option_d"], q["correct_answer"],
                      q.get("explanation", ""), q.get("reference", ""),
-                     year if year is not None else q.get("year")))
+                     year if year is not None else q.get("year"),
+                     month))
                 saved += 1
             except Exception as e:
                 logger.error(f"save_bulk_questions error: {e}")
                 failed += 1
         await db.commit()
 
-    yr_label = str(year) if year else "No year"
+    yr_label = str(year) if year else "ዓመት የለም"
+    mo_label = month if month else ""
+    yr_mo    = yr_label + (f" / {mo_label}" if mo_label else "")
     context.user_data.clear()
     await query.edit_message_text(
-        f"✅ *Upload Complete!*\n\n"
-        f"✅ Saved: *{saved}*\n"
-        f"❌ Failed: *{failed}*\n\n"
-        f"Exam: *{exam_type.title()}*\n"
-        f"Stream / Dept: *{stream}*\n"
-        f"Subject: *{subject.replace(chr(95),' ').title()}*\n"
-        f"Year: *{yr_label}*",
+        f"✅ *ስቀላ ተጠናቋል!*\n\n"
+        f"✅ ተቀምጧል: *{saved}*\n"
+        f"❌ አልተቀመጠም: *{failed}*\n\n"
+        f"ፈተና: *{exam_type.title()}*\n"
+        f"ዥረት / ክፍል: *{stream}*\n"
+        f"ትምህርት: *{subject.replace(chr(95),' ').title()}*\n"
+        f"ዓመት / ወር: *{yr_mo}*",
         parse_mode="Markdown",
         reply_markup=admin_back_keyboard())
 
@@ -1433,7 +1484,7 @@ async def show_questions_list(query, exam_type, stream, offset=0, page_size=10):
             "SELECT COUNT(*) FROM questions WHERE exam_type=? AND stream=?",
             (exam_type, stream))).fetchone())[0]
         cur  = await db.execute(
-            "SELECT id, question_text, correct_answer, year FROM questions "
+            "SELECT id, question_text, correct_answer, year, exam_month FROM questions "
             "WHERE exam_type=? AND stream=? ORDER BY id LIMIT ? OFFSET ?",
             (exam_type, stream, page_size, offset))
         rows = [dict(r) for r in await cur.fetchall()]
@@ -1444,7 +1495,8 @@ async def show_questions_list(query, exam_type, stream, offset=0, page_size=10):
     for r in rows:
         qt = (r["question_text"] or "")[:50].replace("*", "").replace("_", "")
         yr = f" [{r['year']}]" if r.get("year") else ""
-        lines.append(f"`ID:{r['id']}`{yr} ✅{r['correct_answer']} — {qt}…")
+        mo = f" ({r['exam_month']})" if r.get("exam_month") else ""
+        lines.append(f"`ID:{r['id']}`{yr}{mo} ✅{r['correct_answer']} — {qt}…")
     nav = []
     if offset > 0:
         nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"vq_page_{exam_type}_{stream}_{offset - page_size}"))
@@ -1494,7 +1546,7 @@ async def show_questions_list_by_subject(query, exam_type, subject, offset=0, pa
             "SELECT COUNT(*) FROM questions WHERE exam_type=? AND (subject=? OR (? IS NULL AND subject IS NULL))",
             (exam_type, subj_filter, subj_filter))).fetchone())[0]
         cur = await db.execute(
-            "SELECT id, question_text, correct_answer, year, stream FROM questions "
+            "SELECT id, question_text, correct_answer, year, exam_month, stream FROM questions "
             "WHERE exam_type=? AND (subject=? OR (? IS NULL AND subject IS NULL)) "
             "ORDER BY id LIMIT ? OFFSET ?",
             (exam_type, subj_filter, subj_filter, page_size, offset))
@@ -1507,8 +1559,9 @@ async def show_questions_list_by_subject(query, exam_type, subject, offset=0, pa
     for r in rows:
         qt = (r["question_text"] or "")[:50].replace("*", "").replace("_", "")
         yr = f" [{r['year']}]" if r.get("year") else ""
+        mo = f" ({r['exam_month']})" if r.get("exam_month") else ""
         st = f" ({r['stream']})" if r.get("stream") else ""
-        lines.append(f"`ID:{r['id']}`{yr}{st} ✅{r['correct_answer']} — {qt}…")
+        lines.append(f"`ID:{r['id']}`{yr}{mo}{st} ✅{r['correct_answer']} — {qt}…")
     nav = []
     if offset > 0:
         nav.append(InlineKeyboardButton(
