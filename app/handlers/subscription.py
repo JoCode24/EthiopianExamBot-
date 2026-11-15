@@ -60,26 +60,26 @@ async def _get_bank_accounts() -> list[dict]:
 
 def _exam_type_keyboard() -> InlineKeyboardMarkup:
     labels = {
-        "entrance": "🎓 Entrance Exam",
-        "exit":     "🏛️ Exit Exam",
-        "coc":      "🏅 CoC Exam",
-        "driving":  "🚗 Driving Licence",
-        "remedial": "📝 Remedial Exam",
-        "mock":     "📋 Mock / Model Exam",
+        "entrance": "🎓 የዩኒቨርሲቲ መግቢያ ፈተና",
+        "exit":     "🏛️ የመውጫ ፈተና (Exit Exam)",
+        "coc":      "🏅 CoC ፈተና",
+        "driving":  "🚗 የመኪና ፈቃድ ፈተና",
+        "remedial": "📝 የማሟያ ፈተና (Remedial)",
+        "mock":     "📋 የሞዴል ፈተና (Mock)",
     }
     buttons = [
         [InlineKeyboardButton(labels[et], callback_data=f"sub_exam_{et}")]
         for et in EXAM_TYPES
     ]
-    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_sub")])
+    buttons.append([InlineKeyboardButton("❌ ሰርዝ", callback_data="cancel_sub")])
     return InlineKeyboardMarkup(buttons)
 
 
 def _stream_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔬 Natural Science", callback_data="sub_stream_natural")],
-        [InlineKeyboardButton("📚 Social Science",  callback_data="sub_stream_social")],
-        [InlineKeyboardButton("❌ Cancel",           callback_data="cancel_sub")],
+        [InlineKeyboardButton("🔬 የተፈጥሮ ሳይንስ", callback_data="sub_stream_natural")],
+        [InlineKeyboardButton("📚 ማህበራዊ ሳይንስ",  callback_data="sub_stream_social")],
+        [InlineKeyboardButton("❌ ሰርዝ",           callback_data="cancel_sub")],
     ])
 
 
@@ -119,7 +119,7 @@ async def _dept_keyboard_from_db(exam_type: str, stream) -> InlineKeyboardMarkup
         )]
         for d in depts
     ]
-    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_sub")])
+    buttons.append([InlineKeyboardButton("❌ ሰርዝ", callback_data="cancel_sub")])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -132,7 +132,7 @@ async def cancel_sub_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     for key in ("sub_exam_type", "sub_stream", "sub_dept", "waiting_for"):
         context.user_data.pop(key, None)
     await query.edit_message_text(
-        "❌ *Subscription cancelled.*\n\nSend /start to return to the main menu.",
+        "❌ *ምዝገባ ተሰርዟል።*\n\nወደ ዋናው ምናሌ ለመመለስ /start ብለው ያስገቡ።",
         parse_mode="Markdown",
     )
 
@@ -148,8 +148,8 @@ async def subscribe_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         send = update.message.reply_text
 
     await send(
-        "📚 *Choose an exam type to subscribe to:*\n\n"
-        "You can hold multiple subscriptions at the same time.",
+        "📚 *ለመመዝገብ የፈተና አይነት ይምረጡ:*\n\n"
+        "በአንድ ጊዜ ለብዙ ፈተናዎች መመዝገብ ይቻላል።",
         parse_mode="Markdown",
         reply_markup=_exam_type_keyboard(),
     )
@@ -166,17 +166,27 @@ async def sub_exam_select_handler(update: Update, context: ContextTypes.DEFAULT_
     context.user_data["sub_stream"]    = None
     context.user_data["sub_dept"]      = None
 
+    _exam_labels = {
+        "entrance": "🎓 የዩኒቨርሲቲ መግቢያ ፈተና",
+        "exit":     "🏛️ የመውጫ ፈተና",
+        "coc":      "🏅 CoC ፈተና",
+        "driving":  "🚗 የመኪና ፈቃድ ፈተና",
+        "remedial": "📝 (Remedial) የማሟያ ፈተና",
+        "mock":     "📋 የሞዴል ፈተና",
+    }
+    exam_label = _exam_labels.get(exam_type, exam_type.capitalize())
+
     if exam_type in ("entrance", "remedial"):
         # Stream only (natural / social) → then straight to bank, NO dept step
         await query.edit_message_text(
-            f"📖 *{exam_type.capitalize()} Exam*\n\nSelect your stream:",
+            f"📖 *{exam_label}*\n\nየትምህርት ዘርፍዎን ይምረጡ:",
             parse_mode="Markdown",
             reply_markup=_stream_keyboard(),
         )
     elif exam_type in ("exit", "coc"):
         # Department only (from DB) → straight to bank, NO stream step
         await query.edit_message_text(
-            f"🏛️ *{exam_type.upper()} Exam*\n\nSelect your department:",
+            f"🏛️ *{exam_label}*\n\nክፍሎትን ይምረጡ:",
             parse_mode="Markdown",
             reply_markup=await _dept_keyboard_from_db(exam_type, None),
         )
@@ -226,8 +236,8 @@ async def _show_bank_info(query, context, exam_type, stream, dept):
     # Show renewal notice if already subscribed (but still allow payment)
     if await check_subscription(telegram_id, exam_type, stream, dept):
         renew_note = (
-            f"ℹ️ You already have an active subscription for *{exam_label}*.\n\n"
-            "You can renew it now — your access will be extended by 30 days.\n\n"
+            f"ℹ️ ለ *{exam_label}* ንቁ የሆነ ምዝገባ አለዎት።\n\n"
+            "አሁን ማደስ ይችላሉ — ተደራሽነትዎ በ30 ቀናት ይራዘማል።\n\n"
         )
     else:
         renew_note = ""
@@ -236,30 +246,30 @@ async def _show_bank_info(query, context, exam_type, stream, dept):
 
     if not accounts:
         await query.edit_message_text(
-            "⚠️ No bank accounts configured yet.\n"
-            "Please contact the admin to arrange payment.",
+            "⚠️ የባንክ መለያ ገና አልተዋቀረም።\n"
+            "ለክፍያ ዝግጅት አስተዳዳሪውን ያነጋግሩ።",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="subscribe")]
+                [InlineKeyboardButton("🔙 ተመለስ", callback_data="subscribe")]
             ]),
         )
         return
 
-    lines = [renew_note + "💳 *Payment Details*\n"]
+    lines = [renew_note + "💳 *የክፍያ መረጃ*\n"]
     for acc in accounts:
-        name   = acc.get("bank_name", "Bank")
+        name   = acc.get("bank_name", "ባንክ")
         number = acc.get("account_number") or acc.get("account_no", "")
         holder = acc.get("account_holder") or acc.get("account_name", "")
-        lines.append(f"🏦 *{name}*\nAccount No: `{number}`\nHolder: {holder}\n")
+        lines.append(f"🏦 *{name}*\nየሂሳብ ቁጥር: `{number}`\nባለሂሳብ: {holder}\n")
 
-    lines.append(f"📚 Plan: *{exam_label}*")
-    lines.append("\nAfter paying, tap *I've Paid* and send your receipt photo.")
+    lines.append(f"📚 ፕላን: *{exam_label}*")
+    lines.append("\nከፍያ ከፈሉ በኋላ *ከፍያለሁ* ቁልፍን ተጫኑ ደረሰኝ ያስገቡ።")
 
     await query.edit_message_text(
         "\n".join(lines),
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ I've Paid — Send Receipt", callback_data=f"pay_{exam_type}")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_sub")],
+            [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ላክ", callback_data=f"pay_{exam_type}")],
+            [InlineKeyboardButton("❌ ሰርዝ", callback_data="cancel_sub")],
         ]),
     )
 
@@ -275,9 +285,9 @@ async def pay_bank_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data["waiting_for"]   = "receipt_photo"
 
     await query.edit_message_text(
-        "📸 *Send your payment receipt photo now.*\n\n"
-        "Make sure the transaction details are clearly visible.\n"
-        "The admin will review and approve within a few minutes.",
+        "📸 *አሁን የክፍያ ደረሰኝ ፎቶ ይላኩ።*\n\n"
+        "የሂደቱ ዝርዝር በግልጽ የሚታይ ፎቶ ያስገቡ።\n"
+        "አስተዳዳሪው ይፈትሸዋል ብዙም ሳይቆይ ያረጋግጣል።",
         parse_mode="Markdown",
     )
 
@@ -287,7 +297,7 @@ async def send_receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     context.user_data["waiting_for"] = "receipt_photo"
     await query.edit_message_text(
-        "📸 *Send your payment receipt photo.*",
+        "📸 *የክፍያ ደረሰኝ ፎቶ ይላኩ።*",
         parse_mode="Markdown",
     )
 
@@ -300,7 +310,7 @@ async def receipt_photo_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     if not update.message or not update.message.photo:
         await update.message.reply_text(
-            "⚠️ Please send a *photo* (not a file/document). Try again.",
+            "⚠️ እባክዎ *ፎቶ* ይላኩ (ፋይል/ሰነድ አይደለም)። እንደገና ይሞክሩ።",
             parse_mode="Markdown",
         )
         return
@@ -331,25 +341,25 @@ async def receipt_photo_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if dept:   exam_label += f" / {dept.replace('_',' ').title()}"
 
     await update.message.reply_text(
-        f"✅ *Receipt received!*\n\n"
-        f"📚 Plan: *{exam_label}*\n"
-        f"🧾 Receipt ID: `{payment_id}`\n\n"
-        f"Your request is *pending admin review*.\n"
-        f"You will be notified as soon as it's approved. ⏳",
+        f"✅ *ደረሰኝ ተቀብሏል!*\n\n"
+        f"📚 ፕላን: *{exam_label}*\n"
+        f"🧾 ደረሰኝ ቁጥር: `{payment_id}`\n\n"
+        f"ጥያቄዎ *በአስተዳዳሪ እየታየ ነው።*\n"
+        f"ሲፈቀድ ወዲያው ማሳወቂያ ይደርስዎታል። ⏳",
         parse_mode="Markdown",
     )
 
     # Notify admin with photo + approve/reject buttons
     user          = update.effective_user
-    username_part = f"@{user.username}" if user.username else "(no username)"
-    full_name     = user.full_name or "(no name)"
+    username_part = f"@{user.username}" if user.username else "(username የለም)"
+    full_name     = user.full_name or "(ስም የለም)"
 
     caption = (
-        f"📥 *New Payment Receipt*\n\n"
+        f"📥 *አዲስ የክፍያ ደረሰኝ*\n\n"
         f"👤 {full_name}  {username_part}\n"
         f"🆔 `{telegram_id}`\n"
-        f"📚 Plan: *{exam_label}*\n"
-        f"🧾 Receipt ID: `{payment_id}`"
+        f"📚 ፕላን: *{exam_label}*\n"
+        f"🧾 ደረሰኝ ቁጥር: `{payment_id}`"
     )
 
     kb = receipt_action_keyboard(payment_id, telegram_id, exam_type, stream or "", dept or "")
