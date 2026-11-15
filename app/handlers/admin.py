@@ -539,11 +539,24 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         if has_upload: context.user_data["upload_exam_type"] = "exit"
         depts = await get_depts("exit")
         if not depts:
-            await query.edit_message_text(
-                "⚠️ No Exit Exam departments found.\n\n"
-                "Add departments first:\nAdmin Panel → Manage Departments\n\n"
-                "Format: `exit|key|name|emoji`\nExample: `exit|nursing|Nursing|🩺`",
-                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            if has_upload:
+                # No depts but we have a file — ask dept name as text
+                context.user_data["upload_stream"] = "general"
+                context.user_data["upload_subject"] = "exit"
+                parsed = context.user_data.get("parsed_questions", [])
+                context.user_data["waiting_for"] = "upload_year"
+                await query.edit_message_text(
+                    "📅 *የፈተና ዓመት ያስገቡ* (" + str(len(parsed)) + " ጥያቄዎች)\n\n"
+                    "ምሳሌ: `2015`, `2016`, `2017`\n"
+                    "ዓመቱ ካልታወቀ `skip` ብለው ያስገቡ\n\n"
+                    "ፈተና: *Exit Exam*",
+                    parse_mode="Markdown")
+            else:
+                await query.edit_message_text(
+                    "⚠️ No Exit Exam departments found.\n\n"
+                    "Add departments first:\nAdmin Panel → Manage Departments\n\n"
+                    "Format: `exit|key|name|emoji`\nExample: `exit|nursing|Nursing|🩺`",
+                    parse_mode="Markdown", reply_markup=admin_back_keyboard())
             return
         await query.edit_message_text("🏛️ Choose department:", reply_markup=build_dept_keyboard(depts))
 
@@ -552,11 +565,24 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         if has_upload: context.user_data["upload_exam_type"] = "coc"
         depts = await get_depts("coc")
         if not depts:
-            await query.edit_message_text(
-                "⚠️ No CoC departments found.\n\n"
-                "Add departments first via Manage Departments.\n"
-                "Format: `coc|key|name|emoji`\nExample: `coc|coc_electrical|Electrical|⚡`",
-                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            if has_upload:
+                # No depts but we have a file — proceed with generic dept
+                context.user_data["upload_stream"] = "general"
+                context.user_data["upload_subject"] = "coc"
+                parsed = context.user_data.get("parsed_questions", [])
+                context.user_data["waiting_for"] = "upload_year"
+                await query.edit_message_text(
+                    "📅 *የፈተና ዓመት ያስገቡ* (" + str(len(parsed)) + " ጥያቄዎች)\n\n"
+                    "ምሳሌ: `2015`, `2016`, `2017`\n"
+                    "ዓመቱ ካልታወቀ `skip` ብለው ያስገቡ\n\n"
+                    "ፈተና: *CoC*",
+                    parse_mode="Markdown")
+            else:
+                await query.edit_message_text(
+                    "⚠️ No CoC departments found.\n\n"
+                    "Add departments first via Manage Departments.\n"
+                    "Format: `coc|key|name|emoji`\nExample: `coc|coc_electrical|Electrical|⚡`",
+                    parse_mode="Markdown", reply_markup=admin_back_keyboard())
             return
         await query.edit_message_text("📋 Choose CoC department:", reply_markup=build_dept_keyboard(depts))
 
@@ -568,11 +594,23 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             context.user_data["upload_stream"]    = "general"
         subjects = await get_subjects("driving", "general")
         if not subjects:
-            await query.edit_message_text(
-                "⚠️ No Driving subjects found.\n\n"
-                "Add subjects first via Manage Subjects.\n"
-                "Format: `driving|general|key|name|emoji`",
-                parse_mode="Markdown", reply_markup=admin_back_keyboard())
+            if has_upload:
+                # No subjects — just save under "general"
+                context.user_data["upload_subject"] = "general"
+                parsed = context.user_data.get("parsed_questions", [])
+                context.user_data["waiting_for"] = "upload_year"
+                await query.edit_message_text(
+                    "📅 *የፈተና ዓመት ያስገቡ* (" + str(len(parsed)) + " ጥያቄዎች)\n\n"
+                    "ምሳሌ: `2015`, `2016`, `2017`\n"
+                    "ዓመቱ ካልታወቀ `skip` ብለው ያስገቡ\n\n"
+                    "ፈተና: *Driving*",
+                    parse_mode="Markdown")
+            else:
+                await query.edit_message_text(
+                    "⚠️ No Driving subjects found.\n\n"
+                    "Add subjects first via Manage Subjects.\n"
+                    "Format: `driving|general|key|name|emoji`",
+                    parse_mode="Markdown", reply_markup=admin_back_keyboard())
             return
         prefix = "upload_subject_" if has_upload else "aq_subject_"
         await query.edit_message_text("🚗 Choose subject:", reply_markup=build_subject_keyboard(subjects, prefix=prefix))
@@ -696,22 +734,46 @@ async def admin_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data == "aq_stream_natural":
-        exam_type  = context.user_data.get("aq_exam_type", "entrance")
+        exam_type = context.user_data.get("aq_exam_type", "entrance")
         context.user_data["aq_stream"] = "natural"
-        subjects   = await get_subjects(exam_type, "natural")
+        subjects = await get_subjects(exam_type, "natural")
         if has_upload:
             context.user_data["upload_stream"] = "natural"
-            await query.edit_message_text("🔬 Choose subject:", reply_markup=build_subject_keyboard(subjects, prefix="upload_subject_"))
+            if not subjects:
+                # No subjects configured — stream itself is enough, ask year
+                context.user_data["upload_subject"] = "natural"
+                parsed = context.user_data.get("parsed_questions", [])
+                context.user_data["waiting_for"] = "upload_year"
+                await query.edit_message_text(
+                    "📅 *የፈተና ዓመት ያስገቡ* (" + str(len(parsed)) + " ጥያቄዎች)\n\n"
+                    "ምሳሌ: `2015`, `2016`, `2017`\n"
+                    "ዓመቱ ካልታወቀ `skip` ብለው ያስገቡ\n\n"
+                    "ዥረት: Natural\nፈተና: *" + exam_type.title() + "*",
+                    parse_mode="Markdown")
+            else:
+                await query.edit_message_text("🔬 Choose subject:", reply_markup=build_subject_keyboard(subjects, prefix="upload_subject_"))
         else:
             await query.edit_message_text("🔬 Choose subject:", reply_markup=build_subject_keyboard(subjects))
 
     elif data == "aq_stream_social":
-        exam_type  = context.user_data.get("aq_exam_type", "entrance")
+        exam_type = context.user_data.get("aq_exam_type", "entrance")
         context.user_data["aq_stream"] = "social"
-        subjects   = await get_subjects(exam_type, "social")
+        subjects = await get_subjects(exam_type, "social")
         if has_upload:
             context.user_data["upload_stream"] = "social"
-            await query.edit_message_text("📚 Choose subject:", reply_markup=build_subject_keyboard(subjects, prefix="upload_subject_"))
+            if not subjects:
+                # No subjects configured — stream itself is enough, ask year
+                context.user_data["upload_subject"] = "social"
+                parsed = context.user_data.get("parsed_questions", [])
+                context.user_data["waiting_for"] = "upload_year"
+                await query.edit_message_text(
+                    "📅 *የፈተና ዓመት ያስገቡ* (" + str(len(parsed)) + " ጥያቄዎች)\n\n"
+                    "ምሳሌ: `2015`, `2016`, `2017`\n"
+                    "ዓመቱ ካልታወቀ `skip` ብለው ያስገቡ\n\n"
+                    "ዥረት: Social\nፈተና: *" + exam_type.title() + "*",
+                    parse_mode="Markdown")
+            else:
+                await query.edit_message_text("📚 Choose subject:", reply_markup=build_subject_keyboard(subjects, prefix="upload_subject_"))
         else:
             await query.edit_message_text("📚 Choose subject:", reply_markup=build_subject_keyboard(subjects))
 
