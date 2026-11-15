@@ -242,6 +242,15 @@ async def _show_exam_type(query, exam_type: str):
             cur = await db.execute(
                 "SELECT * FROM departments WHERE exam_type=?", (exam_type,))
             depts = [dict(r) for r in await cur.fetchall()]
+        if not depts:
+            await query.edit_message_text(
+                f"*{title}*\n\n⚠️ No departments configured yet.\n\nPlease contact the admin.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Back", callback_data="main_menu")]
+                ]),
+            )
+            return
         # Use | separator: dept|exit|computer_science
         buttons = [
             [InlineKeyboardButton(
@@ -263,6 +272,15 @@ async def _show_exam_type(query, exam_type: str):
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT * FROM subjects WHERE exam_type='driving'")
             subjects = [dict(r) for r in await cur.fetchall()]
+        if not subjects:
+            await query.edit_message_text(
+                f"*{title}*\n\n⚠️ No topics configured yet.\n\nPlease contact the admin.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Back", callback_data="main_menu")]
+                ]),
+            )
+            return
         buttons = [
             [InlineKeyboardButton(
                 f"{s['emoji']} {s['subject_name']}",
@@ -282,6 +300,15 @@ async def _show_exam_type(query, exam_type: str):
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT * FROM subjects WHERE exam_type=?", (exam_type,))
             subjects = [dict(r) for r in await cur.fetchall()]
+        if not subjects:
+            await query.edit_message_text(
+                f"*{title}*\n\n⚠️ No subjects configured yet.\n\nPlease contact the admin.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Back", callback_data="main_menu")]
+                ]),
+            )
+            return
         buttons = [
             [InlineKeyboardButton(
                 f"{s['emoji']} {s['subject_name']}",
