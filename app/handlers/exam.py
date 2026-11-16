@@ -206,70 +206,6 @@ async def direct_subject_handler(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 
-async def examyear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Called when user picks a year button (examyear_<exam_type>|<stream>|<subject>|<year>).
-    For exit/coc: check if that year has multiple months in DB.
-      - If yes  → show month buttons so user picks which sitting
-      - If no   → start exam directly (no month filter needed)
-    For other exam types: start exam directly.
-    """
-    query = update.callback_query
-    await query.answer()
-
-    raw   = query.data.replace("examyear_", "")
-    parts = raw.split("|")
-    if len(parts) < 4:
-        await query.edit_message_text("⚠️ Invalid selection.")
-        return
-
-    exam_type, stream_or_dept, subject_key, year_str = parts[0], parts[1], parts[2], parts[3]
-    year = int(year_str) if year_str and year_str != "0" else None
-
-    # For exit/coc check if months exist for this year
-    if exam_type in ("exit", "coc") and year:
-        async with aiosqlite.connect(DATABASE_PATH) as db:
-            cur = await db.execute(
-                "SELECT DISTINCT exam_month FROM questions "
-                "WHERE exam_type=? AND subject=? AND year=? AND exam_month IS NOT NULL",
-                (exam_type, subject_key, year))
-            months = [r[0] for r in await cur.fetchall()]
-
-        if months:
-            # Show month selection buttons
-            buttons = []
-            for mo in months:
-                buttons.append([InlineKeyboardButton(
-                    f"📆 {year} — {mo}",
-                    callback_data=f"start_exam_{exam_type}|{stream_or_dept}|{subject_key}|{year}|{mo}"
-                )])
-            # Also offer all months combined
-            buttons.append([InlineKeyboardButton(
-                f"📋 {year} — ሁሉም ወሮች",
-                callback_data=f"start_exam_{exam_type}|{stream_or_dept}|{subject_key}|{year}"
-            )])
-            buttons.append([InlineKeyboardButton("⬅️ ተመለስ", callback_data="main_menu")])
-
-            # Subject display name
-            async with aiosqlite.connect(DATABASE_PATH) as db:
-                cur = await db.execute(
-                    "SELECT subject_name, emoji FROM subjects WHERE subject_key=?", (subject_key,))
-                row_s = await cur.fetchone()
-            subj_name = f"{row_s[1]} {row_s[0]}" if row_s else subject_key
-
-            await query.edit_message_text(
-                f"📚 *{subj_name}* — {year}\n\n"
-                f"ይህ ዓመት ብዙ ወሮች አሉ። የትኛውን ወር ፈተና ይፈልጋሉ?",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
-            return
-
-    # No months or not exit/coc — go straight to start
-    query.data = f"start_exam_{exam_type}|{stream_or_dept}|{subject_key}|{year_str}"
-    await start_exam_handler(update, context)
-
-
 async def _do_start_exam(query, context: ContextTypes.DEFAULT_TYPE,
                          exam_type: str, stream_or_dept: str,
                          subject_key: str, year_str: str, month: str = None):
@@ -359,6 +295,66 @@ async def start_exam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     month          = parts[4] if len(parts) >= 5 else None
 
     await _do_start_exam(query, context, exam_type, stream_or_dept, subject_key, year_str, month)
+
+
+async def examyear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Called when user picks a year button (examyear_<exam_type>|<stream>|<subject>|<year>).
+    For exit/coc: check if that year has multiple months in DB.
+      - If yes  → show month buttons so user picks which sitting
+      - If no   → start exam directly
+    For other exam types: start exam directly.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    raw   = query.data.replace("examyear_", "")
+    parts = raw.split("|")
+    if len(parts) < 4:
+        await query.edit_message_text("⚠️ Invalid selection.")
+        return
+
+    exam_type, stream_or_dept, subject_key, year_str = parts[0], parts[1], parts[2], parts[3]
+    year = int(year_str) if year_str and year_str != "0" else None
+
+    # For exit/coc check if months exist for this year
+    if exam_type in ("exit", "coc") and year:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cur = await db.execute(
+                "SELECT DISTINCT exam_month FROM questions "
+                "WHERE exam_type=? AND subject=? AND year=? AND exam_month IS NOT NULL",
+                (exam_type, subject_key, year))
+            months = [r[0] for r in await cur.fetchall()]
+
+        if months:
+            buttons = []
+            for mo in months:
+                buttons.append([InlineKeyboardButton(
+                    f"📆 {year} — {mo}",
+                    callback_data=f"start_exam_{exam_type}|{stream_or_dept}|{subject_key}|{year}|{mo}"
+                )])
+            buttons.append([InlineKeyboardButton(
+                f"📋 {year} — ሁሉም ወሮች",
+                callback_data=f"start_exam_{exam_type}|{stream_or_dept}|{subject_key}|{year}"
+            )])
+            buttons.append([InlineKeyboardButton("⬅️ ተመለስ", callback_data="main_menu")])
+
+            async with aiosqlite.connect(DATABASE_PATH) as db:
+                cur = await db.execute(
+                    "SELECT subject_name, emoji FROM subjects WHERE subject_key=?", (subject_key,))
+                row_s = await cur.fetchone()
+            subj_name = f"{row_s[1]} {row_s[0]}" if row_s else subject_key
+
+            await query.edit_message_text(
+                f"📚 *{subj_name}* — {year}\n\n"
+                f"ይህ ዓመት ብዙ ወሮች አሉ። የትኛውን ወር ፈተና ይፈልጋሉ?",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+    # No months or not exit/coc — start exam directly
+    await _do_start_exam(query, context, exam_type, stream_or_dept, subject_key, year_str)
 
 
 async def _send_question(query, context: ContextTypes.DEFAULT_TYPE):
@@ -550,8 +546,13 @@ async def retry_exam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
     raw = query.data.replace("retry_exam_", "")
-    query.data = f"start_exam_{raw}"
-    await start_exam_handler(update, context)
+    parts = raw.split("|")
+    if len(parts) < 4:
+        await query.edit_message_text("⚠️ Invalid retry selection.")
+        return
+    exam_type, stream_or_dept, subject_key, year_str = parts[0], parts[1], parts[2], parts[3]
+    month = parts[4] if len(parts) >= 5 else None
+    await _do_start_exam(query, context, exam_type, stream_or_dept, subject_key, year_str, month)
 
 
 # ── Subscribed exam flow ────────────────────────────────────────────────────────
@@ -679,16 +680,21 @@ async def sub_year_select_handler(update: Update, context: ContextTypes.DEFAULT_
     exam_type = user.get("subscribed_exam_type") or ""
     stream_or_dept = user.get("subscribed_stream") or user.get("subscribed_dept") or ""
 
-    query.data = f"start_exam_{exam_type}|{stream_or_dept}|{subject_key}|{year_str}"
-    await start_exam_handler(update, context)
+    await _do_start_exam(query, context, exam_type, stream_or_dept, subject_key, year_str)
 
 
 async def sub_start_exam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Alias: substart_<...> → delegates to start_exam_handler"""
+    """Alias: substart_<...> → delegates to _do_start_exam"""
     query = update.callback_query
+    await query.answer()
     raw = query.data.replace("substart_", "")
-    query.data = f"start_exam_{raw}"
-    await start_exam_handler(update, context)
+    parts = raw.split("|")
+    if len(parts) < 4:
+        await query.edit_message_text("⚠️ Invalid exam selection.")
+        return
+    exam_type, stream_or_dept, subject_key, year_str = parts[0], parts[1], parts[2], parts[3]
+    month = parts[4] if len(parts) >= 5 else None
+    await _do_start_exam(query, context, exam_type, stream_or_dept, subject_key, year_str, month)
 
 
 # ── Leaderboard ─────────────────────────────────────────────────────────────────
