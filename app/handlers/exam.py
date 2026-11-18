@@ -571,26 +571,23 @@ async def retry_exam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ── Subscribed exam flow ────────────────────────────────────────────────────────
 
 async def my_subscribed_exams_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback: my_sub_exams — shows list of active subscriptions from subscriptions table."""
+    """Callback: my_sub_exams"""
     query = update.callback_query
     await query.answer()
     tid = query.from_user.id
 
+    user = await get_user(tid)
+    if not user:
+        await query.edit_message_text("Please /start first.")
+        return
+
     from datetime import datetime
     now = datetime.utcnow().isoformat()
+    is_sub = bool(user.get("is_subscribed"))
+    expiry = user.get("subscription_expiry") or ""
+    sub_active = is_sub and (not expiry or expiry > now)
 
-    # Load active subscriptions from the multi-subscription table
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT * FROM subscriptions "
-            "WHERE telegram_id=? AND is_active=1 "
-            "AND (expiry_at IS NULL OR expiry_at > ?) "
-            "ORDER BY id DESC",
-            (tid, now))
-        subs = [dict(r) for r in await cur.fetchall()]
-
-    if not subs:
+    if not sub_active:
         await query.edit_message_text(
             "❌ *No Active Subscription*\n\n"
             "You don't have an active subscription yet.\n\n"
@@ -603,91 +600,12 @@ async def my_subscribed_exams_handler(update: Update, context: ContextTypes.DEFA
         )
         return
 
-    exam_icons = {
-        "entrance": "🎓", "exit": "📋", "remedial": "📚",
-        "driving": "🚗", "coc": "🏅",
-    }
+    sub_exam = user.get("subscribed_exam_type") or ""
+    sub_stream = user.get("subscribed_stream") or ""
+    sub_dept = user.get("subscribed_dept") or ""
+    stream_for_query = sub_stream or sub_dept or None
 
-    buttons = []
-    for s in subs:
-        exam_type = s.get("exam_type") or ""
-        stream    = s.get("stream") or ""
-        dept      = s.get("dept") or ""
-        label_part = stream or dept or "General"
-        icon = exam_icons.get(exam_type, "📌")
-        expiry_at = s.get("expiry_at") or ""
-        exp_str = f" (exp {expiry_at[:10]})" if expiry_at else ""
-        buttons.append([InlineKeyboardButton(
-            f"{icon} {exam_type.title()} — {label_part.replace('_',' ').title()}{exp_str}",
-            callback_data=f"mysub_open_{s['id']}"
-        )])
-
-    buttons.append([InlineKeyboardButton("📋 Model/Mock Exam", callback_data="exam_mock")])
-    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="main_menu")])
-
-    await query.edit_message_text(
-        "📚 *My Subscriptions*\n\n"
-        "Choose a subscription to practice:",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
-
-
-async def mysub_open_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback: mysub_open_<sub_id> — open subjects for a specific subscription."""
-    query = update.callback_query
-    await query.answer()
-    tid = query.from_user.id
-
-    sub_id_str = query.data.replace("mysub_open_", "")
-    try:
-        sub_id = int(sub_id_str)
-    except ValueError:
-        await query.edit_message_text("⚠️ Invalid subscription.")
-        return
-
-    from datetime import datetime
-    now = datetime.utcnow().isoformat()
-
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT * FROM subscriptions WHERE id=? AND telegram_id=? AND is_active=1",
-            (sub_id, tid))
-        sub = await cur.fetchone()
-
-    if not sub:
-        await query.edit_message_text(
-            "❌ Subscription not found or expired.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Back", callback_data="my_sub_exams")]
-            ])
-        )
-        return
-
-    sub = dict(sub)
-    exam_type  = sub.get("exam_type") or ""
-    stream     = sub.get("stream") or ""
-    dept       = sub.get("dept") or ""
-    stream_for_query = stream or dept or None
-
-    # Store for later handlers
-    context.user_data["sub_exam_type"]     = exam_type
-    context.user_data["sub_stream_or_dept"] = stream_for_query or ""
-    context.user_data["sub_id"]            = sub_id
-
-    subjects = await get_subjects_for(exam_type, stream_for_query)
-
-    if not subjects:
-        await query.edit_message_text(
-            f"⚠️ No subjects found for *{exam_type.title()}* — {stream_for_query or 'General'}.\n\n"
-            "Contact admin to upload subjects.",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Back", callback_data="my_sub_exams")]
-            ])
-        )
-        return
+    subjects = await get_subjects_for(sub_exam, stream_for_query)
 
     buttons = [
         [InlineKeyboardButton(
@@ -696,14 +614,14 @@ async def mysub_open_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )]
         for s in subjects
     ]
-    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="my_sub_exams")])
+    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="main_menu")])
 
-    expiry_at = sub.get("expiry_at") or ""
-    exp_text = f"\n📅 Expires: `{expiry_at[:10]}`" if expiry_at else ""
-    label_part = (stream or dept or "General").replace("_", " ").title()
-
+    exp_text = f"\n📅 Expires: `{expiry[:10]}`" if expiry else ""
     await query.edit_message_text(
-        f"📋 *{exam_type.title()} — {label_part}*{exp_text}\n\n"
+        f"📋 *Your Subscription*\n\n"
+        f"📚 Exam: *{sub_exam.title()}*\n"
+        f"🔀 Stream/Dept: *{sub_stream or sub_dept or 'General'}*"
+        f"{exp_text}\n\n"
         "Choose a subject to practice:",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=InlineKeyboardMarkup(buttons),
@@ -719,17 +637,12 @@ async def sub_subject_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     subject_key = query.data.replace("sub_subject_", "")
     context.user_data["sub_subject"] = subject_key
 
-    # Prefer context-stored values (set by mysub_open_handler for multi-sub)
-    exam_type      = context.user_data.get("sub_exam_type", "")
-    stream_or_dept = context.user_data.get("sub_stream_or_dept", "")
+    user = await get_user(tid)
+    if not user:
+        return
 
-    # Fallback: read from users table (old single-sub path)
-    if not exam_type:
-        user = await get_user(tid)
-        if not user:
-            return
-        exam_type      = user.get("subscribed_exam_type") or ""
-        stream_or_dept = user.get("subscribed_stream") or user.get("subscribed_dept") or ""
+    exam_type = user.get("subscribed_exam_type") or ""
+    stream_or_dept = user.get("subscribed_stream") or user.get("subscribed_dept") or ""
 
     async with aiosqlite.connect(DATABASE_PATH) as db:
         cur = await db.execute(
@@ -771,19 +684,14 @@ async def sub_year_select_handler(update: Update, context: ContextTypes.DEFAULT_
 
     year_str = query.data.replace("subexamyear_", "")
     subject_key = context.user_data.get("sub_subject", "")
+    tid = query.from_user.id
 
-    # Prefer context-stored values (set by mysub_open_handler for multi-sub)
-    exam_type      = context.user_data.get("sub_exam_type", "")
-    stream_or_dept = context.user_data.get("sub_stream_or_dept", "")
+    user = await get_user(tid)
+    if not user:
+        return
 
-    # Fallback: read from users table (old single-sub path)
-    if not exam_type:
-        tid  = query.from_user.id
-        user = await get_user(tid)
-        if not user:
-            return
-        exam_type      = user.get("subscribed_exam_type") or ""
-        stream_or_dept = user.get("subscribed_stream") or user.get("subscribed_dept") or ""
+    exam_type = user.get("subscribed_exam_type") or ""
+    stream_or_dept = user.get("subscribed_stream") or user.get("subscribed_dept") or ""
 
     await _do_start_exam(query, context, exam_type, stream_or_dept, subject_key, year_str)
 
