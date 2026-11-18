@@ -16,21 +16,11 @@ from telegram.constants import ParseMode
 
 import aiosqlite
 from config import DATABASE_PATH, FREE_QUESTIONS_PER_SUBJECT
-from app.database.db import get_setting
 from app.utils.access import has_full_access, can_do_free_for_subject, increment_free_for_subject
 from app.utils.logger import logger
 
 
 # ── DB helpers ──────────────────────────────────────────────────────────────────
-
-async def get_free_limit() -> int:
-    """Read free questions per subject from DB settings (admin-controlled)."""
-    val = await get_setting("free_questions_per_subject", FREE_QUESTIONS_PER_SUBJECT)
-    try:
-        return int(val)
-    except (TypeError, ValueError):
-        return FREE_QUESTIONS_PER_SUBJECT
-
 
 async def get_user(telegram_id: int):
     async with aiosqlite.connect(DATABASE_PATH) as db:
@@ -163,9 +153,8 @@ async def direct_subject_handler(update: Update, context: ContextTypes.DEFAULT_T
     full_access = await has_full_access(user, exam_type, stream=stream_val, dept=dept_val)
     can_free, used = await can_do_free_for_subject(tid, subject_key)
 
-    free_limit = await get_free_limit()
     if not full_access and not can_free:
-        await _show_paywall(query, free_limit)
+        await _show_paywall(query, FREE_QUESTIONS_PER_SUBJECT)
         return
 
     # Get available years
@@ -205,7 +194,7 @@ async def direct_subject_handler(update: Update, context: ContextTypes.DEFAULT_T
     if full_access:
         status_line = "✅ *Full Access* — unlimited questions"
     else:
-        free_left = free_limit - used
+        free_left = FREE_QUESTIONS_PER_SUBJECT - used
         status_line = f"🆓 *Free Preview* — {free_left} question(s) remaining"
 
     await query.edit_message_text(
@@ -241,13 +230,12 @@ async def _do_start_exam(query, context: ContextTypes.DEFAULT_TYPE,
     full_access = await has_full_access(user, exam_type, stream=stream_val, dept=dept_val)
     can_free, used = await can_do_free_for_subject(tid, subject_key)
 
-    free_limit = await get_free_limit()
     if full_access:
         max_q = 0
     elif can_free:
-        max_q = free_limit - used
+        max_q = FREE_QUESTIONS_PER_SUBJECT - used
     else:
-        await _show_paywall(query, free_limit)
+        await _show_paywall(query, FREE_QUESTIONS_PER_SUBJECT)
         return
 
     questions = await get_questions(exam_type, subject_key,
@@ -464,8 +452,7 @@ async def answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # used_now is actually current used count; check against limit
         from app.utils.access import get_free_used_for_subject
         used_total = await get_free_used_for_subject(tid, exam["subject_key"])
-        free_limit = await get_free_limit()
-        if used_total >= free_limit:
+        if used_total >= FREE_QUESTIONS_PER_SUBJECT:
             # Force end of exam after showing this result
             exam["current"] = len(exam["questions"])
             remaining = 0
