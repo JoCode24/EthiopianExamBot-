@@ -25,6 +25,7 @@ from app.handlers.exam import (
     next_question_handler,
     retry_exam_handler,
     my_subscribed_exams_handler,
+    mysub_open_handler,
     sub_subject_handler,
     sub_year_select_handler,
     sub_start_exam_handler,
@@ -119,6 +120,7 @@ def main():
 
     # ── Subscribed exam flow ──────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(my_subscribed_exams_handler, pattern=r"^my_sub_exams$"))
+    app.add_handler(CallbackQueryHandler(mysub_open_handler,          pattern=r"^mysub_open_"))
     app.add_handler(CallbackQueryHandler(sub_subject_handler,         pattern=r"^sub_subject_"))
     app.add_handler(CallbackQueryHandler(sub_year_select_handler,     pattern=r"^subexamyear_"))
     app.add_handler(CallbackQueryHandler(sub_start_exam_handler,      pattern=r"^substart_"))
