@@ -18,10 +18,8 @@ from app.keyboards.admin_menu import (
 from app.utils.access import is_any_admin, get_admin_role
 from app.utils.logger import logger
 from app.utils.question_parser import parse_questions_from_text
-from app.database.db import get_setting, set_setting
 from config import ADMIN_ID, DATABASE_PATH
 import aiosqlite
-import io
 import random
 import string
 
@@ -87,34 +85,7 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # ── Basic views ───────────────────────────────────────────────────────────
     elif data == "admin_view_users":
-        await show_users(query, offset=0)
-    elif data.startswith("admin_users_page_"):
-        try:
-            offset = int(data.replace("admin_users_page_", ""))
-        except ValueError:
-            offset = 0
-        await show_users(query, offset=offset)
-    elif data == "admin_free_settings":
-        await show_free_settings(query)
-    elif data == "admin_set_free_limit":
-        context.user_data["waiting_for"] = "set_free_limit"
-        cur_val = await get_setting("free_questions_per_subject", "5")
-        await query.edit_message_text(
-            f"⚙️ *Set Free Questions Per Subject*\n\n"
-            f"Current value: *{cur_val}*\n\n"
-            "Type the new number (e.g. `5`).\nType /cancel to abort.",
-            parse_mode="Markdown")
-    elif data == "admin_set_mock_limit":
-        context.user_data["waiting_for"] = "set_mock_limit"
-        cur_val = await get_setting("free_mock_questions", "15")
-        await query.edit_message_text(
-            f"⚙️ *Set Free Mock Exam Questions*\n\n"
-            f"Current value: *{cur_val}*\n\n"
-            "Type the new number (e.g. `15`).\nType /cancel to abort.",
-            parse_mode="Markdown")
-    elif data.startswith("vq_download_"):
-        q_id = data.replace("vq_download_", "")
-        await download_question_txt(query, context, q_id)
+        await show_users(query)
     elif data == "admin_stats":
         if not is_super:
             await query.edit_message_text("⛔ No permission.", reply_markup=admin_back_keyboard())
@@ -1004,36 +975,6 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         await update.message.reply_text(preview, parse_mode="Markdown", reply_markup=admin_confirm_keyboard())
 
-    elif waiting == "set_free_limit":
-        try:
-            val = int(text)
-            if val < 1 or val > 500:
-                raise ValueError
-        except ValueError:
-            await update.message.reply_text("⚠️ Please enter a valid number (1–500).")
-            return
-        await set_setting("free_questions_per_subject", str(val))
-        context.user_data.pop("waiting_for", None)
-        await update.message.reply_text(
-            f"✅ Free questions per subject set to *{val}*.",
-            parse_mode="Markdown",
-            reply_markup=admin_main_keyboard(role or "super"))
-
-    elif waiting == "set_mock_limit":
-        try:
-            val = int(text)
-            if val < 1 or val > 500:
-                raise ValueError
-        except ValueError:
-            await update.message.reply_text("⚠️ Please enter a valid number (1–500).")
-            return
-        await set_setting("free_mock_questions", str(val))
-        context.user_data.pop("waiting_for", None)
-        await update.message.reply_text(
-            f"✅ Free mock exam questions set to *{val}*.",
-            parse_mode="Markdown",
-            reply_markup=admin_main_keyboard(role or "super"))
-
     elif waiting == "grant_sub_info":
         parts = [p.strip() for p in text.split("|")]
         if len(parts) != 4:
@@ -1636,20 +1577,17 @@ async def show_questions_list(query, exam_type, stream, offset=0, page_size=10):
         await query.edit_message_text("No questions found.", reply_markup=admin_back_keyboard())
         return
     lines = [f"📋 *{exam_type.title()} / {stream.replace('_',' ').title()}* — {total} total\n"]
-    download_buttons = []
     for r in rows:
-        qt = (r["question_text"] or "")[:45].replace("*", "").replace("_", "")
+        qt = (r["question_text"] or "")[:50].replace("*", "").replace("_", "")
         yr = f" [{r['year']}]" if r.get("year") else ""
         mo = f" ({r['exam_month']})" if r.get("exam_month") else ""
         lines.append(f"`ID:{r['id']}`{yr}{mo} ✅{r['correct_answer']} — {qt}…")
-        download_buttons.append([InlineKeyboardButton(
-            f"⬇️ Download Q#{r['id']}", callback_data=f"vq_download_{r['id']}")])
     nav = []
     if offset > 0:
         nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"vq_page_{exam_type}_{stream}_{offset - page_size}"))
     if offset + page_size < total:
         nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"vq_page_{exam_type}_{stream}_{offset + page_size}"))
-    keyboard = download_buttons[:]
+    keyboard = []
     if nav: keyboard.append(nav)
     keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"vq_type_{exam_type}")])
     await query.edit_message_text(
@@ -1703,15 +1641,12 @@ async def show_questions_list_by_subject(query, exam_type, subject, offset=0, pa
         return
     subj_label = subject.replace("_", " ").title()
     lines = [f"📋 *{exam_type.title()} / {subj_label}* — {total} total\n"]
-    download_buttons = []
     for r in rows:
-        qt = (r["question_text"] or "")[:45].replace("*", "").replace("_", "")
+        qt = (r["question_text"] or "")[:50].replace("*", "").replace("_", "")
         yr = f" [{r['year']}]" if r.get("year") else ""
         mo = f" ({r['exam_month']})" if r.get("exam_month") else ""
         st = f" ({r['stream']})" if r.get("stream") else ""
         lines.append(f"`ID:{r['id']}`{yr}{mo}{st} ✅{r['correct_answer']} — {qt}…")
-        download_buttons.append([InlineKeyboardButton(
-            f"⬇️ Download Q#{r['id']}", callback_data=f"vq_download_{r['id']}")])
     nav = []
     if offset > 0:
         nav.append(InlineKeyboardButton(
@@ -1719,7 +1654,7 @@ async def show_questions_list_by_subject(query, exam_type, subject, offset=0, pa
     if offset + page_size < total:
         nav.append(InlineKeyboardButton(
             "Next ▶️", callback_data=f"vq_subjpage_{exam_type}|{subject}|{offset + page_size}"))
-    keyboard = download_buttons[:]
+    keyboard = []
     if nav: keyboard.append(nav)
     keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"vq_bysubj_{exam_type}")])
     await query.edit_message_text(
@@ -1728,110 +1663,22 @@ async def show_questions_list_by_subject(query, exam_type, subject, offset=0, pa
         reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-async def show_users(query, offset=0, page_size=15):
+async def show_users(query):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        total      = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
-        subscribed = (await (await db.execute("SELECT COUNT(*) FROM users WHERE is_subscribed=1")).fetchone())[0]
-        cur        = await db.execute(
-            "SELECT * FROM users ORDER BY id DESC LIMIT ? OFFSET ?", (page_size, offset))
-        rows       = [dict(r) for r in await cur.fetchall()]
-
-    page_num = offset // page_size + 1
-    total_pages = (total + page_size - 1) // page_size
-    lines = [
-        f"👥 *Users* — Page {page_num}/{total_pages}\n"
-        f"Total: *{total}*  |  Subscribed: *{subscribed}*\n"
-    ]
+        total     = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
+        subscribed= (await (await db.execute("SELECT COUNT(*) FROM users WHERE is_subscribed=1")).fetchone())[0]
+        cur       = await db.execute("SELECT * FROM users ORDER BY id DESC LIMIT 10")
+        rows      = [dict(r) for r in await cur.fetchall()]
+    lines = [f"👥 *Users*\n\nTotal: *{total}*  |  Subscribed: *{subscribed}*\n\n*Latest 10:*\n"]
     for r in rows:
-        name = (r.get("full_name") or r.get("username") or "Unknown")[:18]
+        name = (r.get("full_name") or r.get("username") or "Unknown")[:20]
         sub  = "💎" if r.get("is_subscribed") else "🆓"
         lines.append(f"{sub} {name} `({r['telegram_id']})`")
-
-    nav = []
-    if offset > 0:
-        nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"admin_users_page_{offset - page_size}"))
-    if offset + page_size < total:
-        nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"admin_users_page_{offset + page_size}"))
-
-    keyboard = []
-    if nav:
-        keyboard.append(nav)
-    keyboard.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_back")])
-
     await query.edit_message_text(
         "\n".join(lines),
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard))
-
-
-async def show_free_settings(query):
-    free_q  = await get_setting("free_questions_per_subject", "5")
-    mock_q  = await get_setting("free_mock_questions", "15")
-    await query.edit_message_text(
-        "⚙️ *Free Question Limits*\n\n"
-        f"📚 Per subject (all exams): *{free_q}* questions\n"
-        f"🏅 Mock / Model exam: *{mock_q}* questions\n\n"
-        "Tap a button below to change:",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton(
-                f"✏️ Set Per-Subject Limit ({free_q})",
-                callback_data="admin_set_free_limit")],
-            [InlineKeyboardButton(
-                f"✏️ Set Mock Exam Limit ({mock_q})",
-                callback_data="admin_set_mock_limit")],
-            [InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_back")],
-        ])
-    )
-
-
-async def download_question_txt(query, context, q_id: str):
-    """Send a single question as a downloadable .txt file."""
-    try:
-        qid = int(q_id)
-    except ValueError:
-        await query.answer("⚠️ Invalid ID", show_alert=True)
-        return
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT * FROM questions WHERE id=?", (qid,))
-        row = await cur.fetchone()
-    if not row:
-        await query.answer("⚠️ Question not found", show_alert=True)
-        return
-    r = dict(row)
-    lines = [
-        f"Q: {r.get('question_text', '')}",
-        f"A) {r.get('option_a', '')}",
-        f"B) {r.get('option_b', '')}",
-        f"C) {r.get('option_c', '')}",
-        f"D) {r.get('option_d', '')}",
-        f"Answer: {r.get('correct_answer', '')}",
-    ]
-    if r.get("explanation"):
-        lines.append(f"Explanation: {r['explanation']}")
-    if r.get("reference"):
-        lines.append(f"Reference: {r['reference']}")
-    if r.get("year"):
-        lines.append(f"Year: {r['year']}")
-    if r.get("exam_month"):
-        lines.append(f"Month: {r['exam_month']}")
-    lines.append(f"Exam Type: {r.get('exam_type', '')}")
-    if r.get("stream"):
-        lines.append(f"Stream/Dept: {r['stream']}")
-    if r.get("subject"):
-        lines.append(f"Subject: {r['subject']}")
-    content = "\n".join(lines)
-    bio = io.BytesIO(content.encode("utf-8"))
-    bio.name = f"question_{qid}.txt"
-    await context.bot.send_document(
-        chat_id=query.from_user.id,
-        document=bio,
-        filename=f"question_{qid}.txt",
-        caption=f"📄 Question ID {qid}"
-    )
-    await query.answer("✅ File sent!")
+        reply_markup=admin_back_keyboard())
 
 
 async def show_stats(query):
